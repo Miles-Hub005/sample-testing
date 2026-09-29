@@ -1,1 +1,0 @@
-"""Companies service tests."""
