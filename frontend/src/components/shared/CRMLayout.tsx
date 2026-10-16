@@ -1,7 +1,6 @@
 import React from 'react';
-import Link from 'next/link';
-import { colors, radii, shadows, spacing, typography } from '../../lib/tokens';
-import { Breadcrumb, BreadcrumbItem } from './Breadcrumb';
+import { colors, spacing, typography, shadows, rounded } from '@/lib/tokens';
+import { BreadcrumbItem, Breadcrumbs } from './Breadcrumbs';
 
 export interface NavItem {
   label: string;
@@ -10,55 +9,52 @@ export interface NavItem {
 }
 
 export interface CRMLayoutProps {
-  /** Page content rendered inside the main content area */
-  children: React.ReactNode;
-  /** Navigation items to render in the header. Defaults to CRM module links. */
-  navItems?: NavItem[];
-  /** Currently active link href for highlighting */
-  activeHref?: string;
-  /** Brand or platform title shown in header. Defaults to 'CRM Platform'. */
+  /** Page or main content to render inside layout */
+  children?: React.ReactNode;
+  /** Application title displayed in the navigation header */
   title?: string;
-  /** Optional custom aria-label for the header element */
+  /** Custom navigation items for header nav */
+  navItems?: NavItem[];
+  /** Optional breadcrumbs items to render in main content area */
+  breadcrumbs?: BreadcrumbItem[];
+  /** Current path to auto-detect active item if active flag not explicitly passed */
+  currentPath?: string;
+  /** Optional custom aria-label for header element */
   headerAriaLabel?: string;
-  /** Optional custom aria-label for the nav element */
+  /** Optional custom aria-label for navigation element */
   navAriaLabel?: string;
-  /** Optional custom aria-label for the main content element */
+  /** Optional custom aria-label for main content area */
   mainAriaLabel?: string;
-  /** Optional additional class name for the root wrapper */
+  /** Optional custom styling class for outer wrapper */
   className?: string;
-  /** Optional extra elements rendered on the right side of header (e.g. user menu or actions) */
-  headerExtra?: React.ReactNode;
-  /** Whether to render breadcrumb navigation above content. Defaults to true. */
-  showBreadcrumb?: boolean;
-  /** Optional explicit breadcrumb items override */
-  breadcrumbItems?: BreadcrumbItem[];
 }
 
-export const DEFAULT_NAV_ITEMS: NavItem[] = [
+const DEFAULT_NAV_ITEMS: NavItem[] = [
+  { label: 'Dashboard', href: '/dashboard' },
   { label: 'Companies', href: '/companies' },
   { label: 'Contacts', href: '/contacts' },
   { label: 'Leads', href: '/leads' },
   { label: 'Tasks', href: '/tasks' },
   { label: 'Interactions', href: '/interactions' },
-  { label: 'Dashboard', href: '/dashboard' },
 ];
 
 /**
- * CRMLayout component providing a standard CRM navigation header,
- * main content area, breadcrumb navigation, and accessible aria-label attributes.
+ * CRMLayout component provides the standard layout shell across the CRM application.
+ * Features:
+ * - Header banner with brand title and navigation links
+ * - Main content container for page content
+ * - Full accessibility with semantic HTML and aria-label attributes
  */
 export const CRMLayout: React.FC<CRMLayoutProps> = ({
   children,
-  navItems = DEFAULT_NAV_ITEMS,
-  activeHref,
   title = 'CRM Platform',
-  headerAriaLabel = 'CRM Header',
-  navAriaLabel = 'CRM Main Navigation',
-  mainAriaLabel = 'Main Content',
-  className,
-  headerExtra,
-  showBreadcrumb = true,
-  breadcrumbItems,
+  navItems = DEFAULT_NAV_ITEMS,
+  breadcrumbs,
+  currentPath,
+  headerAriaLabel = 'Application Header',
+  navAriaLabel = 'Primary Navigation',
+  mainAriaLabel = 'Main Content Area',
+  className = '',
 }) => {
   return (
     <div
@@ -67,125 +63,158 @@ export const CRMLayout: React.FC<CRMLayoutProps> = ({
         minHeight: '100vh',
         display: 'flex',
         flexDirection: 'column',
-        backgroundColor: colors.surface.base,
+        backgroundColor: colors.surface.background,
         color: colors.surface.onSurface,
-        fontFamily: typography.styles.bodyMd.fontFamily,
+        fontFamily: typography.fontFamily.sans,
       }}
     >
+      {/* Accessible skip link for keyboard users */}
+      {/* <a
+        href="#main-content"
+        style={{
+          position: 'absolute',
+          left: '-9999px',
+          top: 'auto',
+          width: '1px',
+          height: '1px',
+          overflow: 'hidden',
+        }}
+        onFocus={(e) => {
+          e.currentTarget.style.position = 'fixed';
+          e.currentTarget.style.top = spacing.md;
+          e.currentTarget.style.left = spacing.md;
+          e.currentTarget.style.width = 'auto';
+          e.currentTarget.style.height = 'auto';
+          e.currentTarget.style.zIndex = '9999';
+          e.currentTarget.style.backgroundColor = colors.accent.DEFAULT;
+          e.currentTarget.style.color = colors.accent.onAccent;
+          e.currentTarget.style.padding = `${spacing.sm} ${spacing.md}`;
+          e.currentTarget.style.borderRadius = rounded.md;
+          e.currentTarget.style.textDecoration = 'none';
+        }}
+        onBlur={(e) => {
+          e.currentTarget.style.position = 'absolute';
+          e.currentTarget.style.left = '-9999px';
+          e.currentTarget.style.width = '1px';
+          e.currentTarget.style.height = '1px';
+        }}
+      >
+        Skip to main content
+      </a> */}
+
+      {/* Navigation Header */}
       <header
+        role="banner"
         aria-label={headerAriaLabel}
         style={{
-          backgroundColor: colors.surface.containerLowest,
-          borderBottom: `1px solid ${colors.surface.outlineVariant}`,
-          boxShadow: shadows.subtle,
-          position: 'sticky',
-          top: 0,
-          zIndex: 10,
-          width: '100%',
+          backgroundColor: colors.surface.containerLow,
+          borderBottom: `1px solid ${colors.borderVariant}`,
+          boxShadow: shadows.sm,
+          paddingLeft: spacing.gutter,
+          paddingRight: spacing.gutter,
+          paddingTop: spacing.lg,
+          paddingBottom: spacing.lg,
         }}
       >
         <div
           style={{
             maxWidth: '1280px',
             margin: '0 auto',
-            padding: `${spacing[4]} ${spacing[6]}`,
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'space-between',
             flexWrap: 'wrap',
-            gap: spacing[4],
+            gap: spacing.md,
           }}
         >
-          <div style={{ display: 'flex', alignItems: 'center', gap: spacing[3] }}>
-            <Link
-              href="/"
-              aria-label="CRM Platform Home"
+          {/* Brand Title */}
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: spacing.md,
+            }}
+          >
+            <h1
               style={{
-                fontFamily: typography.styles.headlineSm.fontFamily,
-                fontSize: typography.styles.headlineSm.fontSize,
-                fontWeight: typography.styles.headlineSm.fontWeight,
-                color: colors.accent.primary,
-                textDecoration: 'none',
-                letterSpacing: '-0.01em',
+                fontFamily: typography.fontFamily.serif,
+                fontSize: typography.sizes['headline-sm'].fontSize,
+                fontWeight: typography.sizes['headline-sm'].fontWeight,
+                lineHeight: typography.sizes['headline-sm'].lineHeight,
+                color: colors.surface.onSurface,
+                margin: 0,
               }}
             >
               {title}
-            </Link>
+            </h1>
           </div>
 
-          <div style={{ display: 'flex', alignItems: 'center', gap: spacing[4] }}>
-            <nav
-              aria-label={navAriaLabel}
+          {/* Primary Navigation */}
+          <nav role="navigation" aria-label={navAriaLabel}>
+            <ul
               style={{
                 display: 'flex',
                 alignItems: 'center',
+                listStyle: 'none',
+                margin: 0,
+                padding: 0,
+                gap: spacing.md,
+                flexWrap: 'wrap',
               }}
             >
-              <ul
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: spacing[1],
-                  listStyle: 'none',
-                  margin: 0,
-                  padding: 0,
-                }}
-              >
-                {navItems.map((item) => {
-                  const isActive =
-                    item.active || (activeHref ? activeHref === item.href : false);
-                  return (
-                    <li key={item.href}>
-                      <Link
-                        href={item.href}
-                        aria-current={isActive ? 'page' : undefined}
-                        aria-label={item.label}
-                        style={{
-                          display: 'inline-block',
-                          padding: `${spacing[2]} ${spacing[3]}`,
-                          borderRadius: radii.default,
-                          fontFamily: typography.styles.labelCaps.fontFamily,
-                          fontSize: typography.styles.labelCaps.fontSize,
-                          fontWeight: isActive
-                            ? '600'
-                            : typography.styles.labelCaps.fontWeight,
-                          letterSpacing: typography.styles.labelCaps.letterSpacing,
-                          textTransform: 'uppercase',
-                          textDecoration: 'none',
-                          color: isActive
-                            ? colors.accent.primary
-                            : colors.surface.onSurfaceVariant,
-                          backgroundColor: isActive
-                            ? colors.surface.containerLow
-                            : 'transparent',
-                          transition: 'background-color 0.2s ease, color 0.2s ease',
-                        }}
-                      >
-                        {item.label}
-                      </Link>
-                    </li>
-                  );
-                })}
-              </ul>
-            </nav>
+              {navItems.map((item) => {
+                const isActive =
+                  item.active !== undefined
+                    ? item.active
+                    : currentPath !== undefined
+                    ? currentPath === item.href || (item.href !== '/' && currentPath.startsWith(item.href))
+                    : false;
 
-            {headerExtra && <div>{headerExtra}</div>}
-          </div>
+                return (
+                  <li key={item.href}>
+                    <a
+                      href={item.href}
+                      aria-current={isActive ? 'page' : undefined}
+                      style={{
+                        display: 'inline-block',
+                        padding: `${spacing.xs} ${spacing.md}`,
+                        borderRadius: rounded.md,
+                        fontSize: typography.sizes['body-md'].fontSize,
+                        fontWeight: isActive ? 600 : 400,
+                        color: isActive ? colors.accent.DEFAULT : colors.surface.onSurfaceVariant,
+                        backgroundColor: isActive ? colors.accent.container : 'transparent',
+                        textDecoration: 'none',
+                        transition: 'background-color 0.15s ease, color 0.15s ease',
+                      }}
+                    >
+                      {item.label}
+                    </a>
+                  </li>
+                );
+              })}
+            </ul>
+          </nav>
         </div>
       </header>
 
+      {/* Main Content Area */}
       <main
+        id="main-content"
+        role="main"
+        tabIndex={-1}
         aria-label={mainAriaLabel}
         style={{
           flex: 1,
-          width: '100%',
           maxWidth: '1280px',
+          width: '100%',
           margin: '0 auto',
-          padding: `${spacing[6]} ${spacing[6]}`,
+          padding: spacing.gutter,
           boxSizing: 'border-box',
         }}
       >
-        {showBreadcrumb && <Breadcrumb items={breadcrumbItems} />}
+        {breadcrumbs && breadcrumbs.length > 0 && (
+          <Breadcrumbs items={breadcrumbs} />
+        )}
         {children}
       </main>
     </div>

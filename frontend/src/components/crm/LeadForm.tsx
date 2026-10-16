@@ -1,6 +1,15 @@
-import React, { useState, useEffect } from 'react';
-import { colors, radii, spacing, typography } from '../../lib/tokens';
-import { Lead } from '../../services/crm';
+'use client';
+
+import React, { useState, useEffect, useId } from 'react';
+import { colors, rounded, spacing, typography } from '@/lib/tokens';
+import { ErrorAlert } from '@/components/shared/Alerts';
+import type {
+  LeadCreate,
+  LeadRead,
+  LeadUpdate,
+  CRMApiError,
+  FieldError,
+} from '@/services/crm';
 
 export interface CompanyOption {
   id: number;
@@ -12,155 +21,261 @@ export interface ContactOption {
   name: string;
 }
 
-export interface LeadFormData {
-  title: string;
-  company_id?: number | null;
-  contact_id?: number | null;
-  value: number | string;
-  status: string;
-  expected_close_date?: string | null;
-  notes?: string;
-  owner?: string;
-}
-
-export interface LeadFormProps {
-  initialValues?: Partial<LeadFormData> | Lead | null;
-  companies?: CompanyOption[];
-  contacts?: ContactOption[];
-  onSubmit: (data: LeadFormData) => void | Promise<void>;
-  onCancel?: () => void;
-  isLoading?: boolean;
-  submitLabel?: string;
-  cancelLabel?: string;
-  serverError?: string | null;
-  serverFieldErrors?: Record<string, string>;
-  className?: string;
-  style?: React.CSSProperties;
-  'data-testid'?: string;
-}
-
-export const LEAD_STATUS_OPTIONS = [
+export const DEFAULT_LEAD_STATUSES = [
   'Prospecting',
   'Qualified',
   'Negotiation',
   'Closed Won',
   'Closed Lost',
-] as const;
+];
 
+export interface LeadFormData {
+  title: string;
+  value: number;
+  status: string;
+  company_id?: number | null;
+  contact_id?: number | null;
+  expected_close_date?: string | null;
+  notes?: string;
+  owner?: string;
+}
+
+export interface LeadFormErrors {
+  title?: string;
+  value?: string;
+  status?: string;
+  company_id?: string;
+  contact_id?: string;
+  expected_close_date?: string;
+  notes?: string;
+  owner?: string;
+  [key: string]: string | undefined;
+}
+
+export interface LeadFormProps {
+  /** Initial values for editing or pre-populating fields */
+  initialValues?: Partial<LeadFormData | LeadRead | LeadCreate | LeadUpdate>;
+  /** Company options for the nullable company dropdown */
+  companies?: CompanyOption[];
+  /** Contact options for the nullable contact dropdown */
+  contacts?: ContactOption[];
+  /** Lead status options for the status dropdown */
+  statuses?: string[];
+  /** Callback fired when form is submitted with valid data */
+  onSubmit: (data: LeadFormData) => void | Promise<void>;
+  /** Callback fired when cancel button is clicked */
+  onCancel?: () => void;
+  /** Whether the submit action is currently in progress */
+  isSubmitting?: boolean;
+  /** Alias for isSubmitting */
+  isLoading?: boolean;
+  /** API error message or error response object */
+  apiError?: string | CRMApiError | { message?: string; fields?: FieldError[] } | null;
+  /** Submit button text label */
+  submitLabel?: string;
+  /** Custom title header for the form card */
+  title?: string;
+  /** Additional CSS class name */
+  className?: string;
+  /** Inline style overrides */
+  style?: React.CSSProperties;
+}
+
+/**
+ * LeadForm Component
+ * Renders a form for creating or editing a Lead entity with fields:
+ * - title (required)
+ * - company_id (nullable dropdown)
+ * - contact_id (nullable dropdown)
+ * - value (required, non-negative number)
+ * - status (dropdown, pipeline status)
+ * - expected_close_date (date picker / ISO date)
+ * - owner (optional)
+ * - notes (optional)
+ * Includes inline validation errors satisfying FR-3, FR-12, and Edge Case 8.
+ */
 export const LeadForm: React.FC<LeadFormProps> = ({
   initialValues,
   companies = [],
   contacts = [],
+  statuses = DEFAULT_LEAD_STATUSES,
   onSubmit,
   onCancel,
+  isSubmitting = false,
   isLoading = false,
-  submitLabel = 'Save Lead',
-  cancelLabel = 'Cancel',
-  serverError,
-  serverFieldErrors = {},
+  apiError,
+  submitLabel,
+  title,
   className = '',
   style,
-  'data-testid': testId = 'lead-form',
 }) => {
-  const [formData, setFormData] = useState<LeadFormData>({
-    title: initialValues?.title || (initialValues as any)?.name || '',
-    company_id: initialValues?.company_id !== undefined ? initialValues.company_id : null,
-    contact_id: initialValues?.contact_id !== undefined ? initialValues.contact_id : null,
-    value: initialValues?.value !== undefined && initialValues?.value !== null ? initialValues.value : '',
-    status: initialValues?.status || 'Prospecting',
-    expected_close_date: initialValues?.expected_close_date || null,
-    notes: (initialValues as any)?.notes || '',
-    owner: (initialValues as any)?.owner || '',
+  const formId = useId();
+  const titleInputId = `${formId}-title-input`;
+  const companySelectId = `${formId}-company-id`;
+  const contactSelectId = `${formId}-contact-id`;
+  const valueInputId = `${formId}-value`;
+  const statusSelectId = `${formId}-status`;
+  const dateInputId = `${formId}-expected-close-date`;
+  const ownerInputId = `${formId}-owner`;
+  const notesInputId = `${formId}-notes`;
+  const headerTitleId = `${formId}-header-title`;
+
+  const pending = isSubmitting || isLoading;
+
+  const [formData, setFormData] = useState({
+    title: initialValues?.title ?? (initialValues as { name?: string })?.name ?? '',
+    value:
+      initialValues?.value !== undefined && initialValues?.value !== null
+        ? String(initialValues.value)
+        : '',
+    status: initialValues?.status ?? 'Prospecting',
+    company_id: initialValues?.company_id ?? null,
+    contact_id: initialValues?.contact_id ?? null,
+    expected_close_date: initialValues?.expected_close_date
+      ? String(initialValues.expected_close_date).split('T')[0]
+      : '',
+    notes: initialValues?.notes ?? '',
+    owner: initialValues?.owner ?? '',
   });
 
-  const [errors, setErrors] = useState<Record<string, string>>({});
+  const [errors, setErrors] = useState<LeadFormErrors>({});
   const [touched, setTouched] = useState<Record<string, boolean>>({});
 
+  // Synchronize form state when initialValues change
   useEffect(() => {
     if (initialValues) {
       setFormData({
-        title: initialValues.title || (initialValues as any)?.name || '',
-        company_id: initialValues.company_id !== undefined ? initialValues.company_id : null,
-        contact_id: initialValues.contact_id !== undefined ? initialValues.contact_id : null,
-        value: initialValues.value !== undefined && initialValues.value !== null ? initialValues.value : '',
-        status: initialValues.status || 'Prospecting',
-        expected_close_date: initialValues.expected_close_date || null,
-        notes: (initialValues as any)?.notes || '',
-        owner: (initialValues as any)?.owner || '',
+        title: initialValues.title ?? (initialValues as { name?: string }).name ?? '',
+        value:
+          initialValues.value !== undefined && initialValues.value !== null
+            ? String(initialValues.value)
+            : '',
+        status: initialValues.status ?? 'Prospecting',
+        company_id: initialValues.company_id ?? null,
+        contact_id: initialValues.contact_id ?? null,
+        expected_close_date: initialValues.expected_close_date
+          ? String(initialValues.expected_close_date).split('T')[0]
+          : '',
+        notes: initialValues.notes ?? '',
+        owner: initialValues.owner ?? '',
       });
+      setErrors({});
+      setTouched({});
     }
   }, [initialValues]);
 
-  const handleChange = (
-    field: keyof LeadFormData,
-    value: any
-  ) => {
-    setFormData((prev) => ({ ...prev, [field]: value }));
+  // Extract server-side field level validation errors if passed via apiError
+  useEffect(() => {
+    if (!apiError) return;
 
-    if (errors[field]) {
-      setErrors((prev) => {
-        const next = { ...prev };
-        delete next[field];
-        return next;
-      });
-    }
-  };
-
-  const handleBlur = (field: keyof LeadFormData) => {
-    setTouched((prev) => ({ ...prev, [field]: true }));
-    validateField(field, formData[field]);
-  };
-
-  const validateField = (field: keyof LeadFormData, value?: any): string | null => {
-    let errorMsg: string | null = null;
-    if (field === 'title') {
-      if (!value || typeof value !== 'string' || !value.trim()) {
-        errorMsg = 'Lead title is required';
-      }
-    } else if (field === 'value') {
-      if (
-        value === undefined ||
-        value === null ||
-        value === '' ||
-        (typeof value === 'string' && !value.trim())
-      ) {
-        errorMsg = 'Lead value is required';
-      } else {
-        const numVal = Number(value);
-        if (isNaN(numVal)) {
-          errorMsg = 'Lead value must be a valid number';
-        } else if (numVal < 0) {
-          errorMsg = 'Lead value cannot be negative';
+    if (typeof apiError === 'object' && 'fields' in apiError && Array.isArray(apiError.fields)) {
+      const serverErrors: LeadFormErrors = {};
+      apiError.fields.forEach((f) => {
+        if (f.field && f.message) {
+          serverErrors[f.field] = f.message;
         }
-      }
-    } else if (field === 'status') {
-      if (!value || typeof value !== 'string' || !value.trim()) {
-        errorMsg = 'Status is required';
+      });
+      if (Object.keys(serverErrors).length > 0) {
+        setErrors((prev) => ({ ...prev, ...serverErrors }));
       }
     }
-    return errorMsg;
+  }, [apiError]);
+
+  /**
+   * Validate individual form field
+   */
+  const validateField = (
+    field: string,
+    value: string | number | null | undefined
+  ): string | undefined => {
+    if (field === 'title') {
+      const strVal = typeof value === 'string' ? value : '';
+      if (!strVal || !strVal.trim()) {
+        return 'Lead title is required';
+      }
+    }
+
+    if (field === 'value') {
+      if (value === '' || value === null || value === undefined) {
+        return 'Lead value is required';
+      }
+      const num = typeof value === 'number' ? value : Number(value);
+      if (isNaN(num)) {
+        return 'Value must be a valid number';
+      }
+      if (num < 0) {
+        return 'Lead value cannot be negative';
+      }
+    }
+
+    if (field === 'status') {
+      const strVal = typeof value === 'string' ? value : '';
+      if (!strVal || !strVal.trim()) {
+        return 'Status is required';
+      }
+    }
+
+    return undefined;
   };
 
-  const validateForm = (): boolean => {
-    const newErrors: Record<string, string> = {};
+  /**
+   * Validate all form fields
+   */
+  const validateAll = (data: typeof formData): LeadFormErrors => {
+    const newErrors: LeadFormErrors = {};
 
-    const titleError = validateField('title', formData.title);
-    if (titleError) {
-      newErrors.title = titleError;
+    const titleError = validateField('title', data.title);
+    if (titleError) newErrors.title = titleError;
+
+    const valueError = validateField('value', data.value);
+    if (valueError) newErrors.value = valueError;
+
+    const statusError = validateField('status', data.status);
+    if (statusError) newErrors.status = statusError;
+
+    return newErrors;
+  };
+
+  const handleChange = (
+    e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>
+  ) => {
+    const { name, value } = e.target;
+    const fieldName = name as keyof typeof formData;
+
+    let updatedValue: string | number | null = value;
+    if (fieldName === 'company_id' || fieldName === 'contact_id') {
+      updatedValue = value === '' || value === 'null' ? null : Number(value);
     }
 
-    const valueError = validateField('value', formData.value);
-    if (valueError) {
-      newErrors.value = valueError;
+    setFormData((prev) => ({ ...prev, [fieldName]: updatedValue }));
+
+    // Re-validate field on change if touched
+    if (touched[fieldName]) {
+      const fieldError = validateField(fieldName, updatedValue);
+      setErrors((prev) => ({
+        ...prev,
+        [fieldName]: fieldError,
+      }));
+    }
+  };
+
+  const handleBlur = (
+    e: React.FocusEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>
+  ) => {
+    const { name, value } = e.target;
+    const fieldName = name as keyof typeof formData;
+
+    let updatedValue: string | number | null = value;
+    if (fieldName === 'company_id' || fieldName === 'contact_id') {
+      updatedValue = value === '' || value === 'null' ? null : Number(value);
     }
 
-    const statusError = validateField('status', formData.status);
-    if (statusError) {
-      newErrors.status = statusError;
-    }
-
-    setErrors(newErrors);
-    return Object.keys(newErrors).length === 0;
+    setTouched((prev) => ({ ...prev, [fieldName]: true }));
+    const fieldError = validateField(fieldName, updatedValue);
+    setErrors((prev) => ({
+      ...prev,
+      [fieldName]: fieldError,
+    }));
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -177,410 +292,578 @@ export const LeadForm: React.FC<LeadFormProps> = ({
       owner: true,
     });
 
-    if (!validateForm()) {
+    const validationErrors = validateAll(formData);
+    setErrors(validationErrors);
+
+    if (Object.keys(validationErrors).length > 0) {
+      if (validationErrors.title) {
+        document.getElementById(titleInputId)?.focus();
+      } else if (validationErrors.value) {
+        document.getElementById(valueInputId)?.focus();
+      } else if (validationErrors.status) {
+        document.getElementById(statusSelectId)?.focus();
+      }
       return;
     }
 
-    try {
-      await onSubmit({
-        title: formData.title.trim(),
-        company_id: formData.company_id ?? null,
-        contact_id: formData.contact_id ?? null,
-        value: Number(formData.value),
-        status: formData.status || 'Prospecting',
-        expected_close_date: formData.expected_close_date || null,
-        notes: formData.notes?.trim() || undefined,
-        owner: formData.owner?.trim() || undefined,
-      });
-    } catch (err) {
-      // Submission error handled externally
-    }
+    const cleanedData: LeadFormData = {
+      title: formData.title.trim(),
+      value: Number(formData.value),
+      status: formData.status || 'Prospecting',
+      company_id: formData.company_id ?? null,
+      contact_id: formData.contact_id ?? null,
+      expected_close_date: formData.expected_close_date ? formData.expected_close_date.trim() : null,
+      notes: formData.notes?.trim() || undefined,
+      owner: formData.owner?.trim() || undefined,
+    };
+
+    await onSubmit(cleanedData);
   };
 
-  const getTitleError = (): string | undefined => {
-    return errors.title || serverFieldErrors.title;
+  const getApiErrorMessage = (): string | null => {
+    if (!apiError) return null;
+    if (typeof apiError === 'string') return apiError;
+    if ('message' in apiError && apiError.message) return apiError.message;
+    return 'An error occurred while saving lead details.';
   };
 
-  const getValueError = (): string | undefined => {
-    return errors.value || serverFieldErrors.value;
-  };
-
-  const getStatusError = (): string | undefined => {
-    return errors.status || serverFieldErrors.status;
-  };
-
-  const titleError = getTitleError();
-  const valueError = getValueError();
-  const statusError = getStatusError();
+  const apiErrorMessage = getApiErrorMessage();
+  const defaultTitle = initialValues?.title || (initialValues as { name?: string })?.name ? 'Edit Lead' : 'Add New Lead';
+  const displayTitle = title ?? defaultTitle;
+  const defaultSubmitLabel = initialValues?.title || (initialValues as { name?: string })?.name ? 'Save Changes' : 'Create Lead';
+  const displaySubmitLabel = submitLabel ?? defaultSubmitLabel;
 
   return (
-    <form
-      data-testid={testId}
-      onSubmit={handleSubmit}
-      className={className}
-      noValidate
+    <div
+      className={`lead-form-container ${className}`}
       style={{
-        display: 'flex',
-        flexDirection: 'column',
-        gap: spacing[4],
         backgroundColor: colors.surface.containerLowest,
-        borderRadius: radii.md,
-        padding: spacing[6],
-        border: `1px solid ${colors.surface.outlineVariant}`,
-        boxShadow: '0 4px 12px rgba(115, 92, 65, 0.05)',
+        border: `1px solid ${colors.borderVariant}`,
+        borderRadius: rounded.lg,
+        padding: spacing.xl,
+        maxWidth: '640px',
+        width: '100%',
+        boxShadow: '0 4px 6px -1px rgba(115, 92, 65, 0.08)',
         ...style,
       }}
     >
-      {/* Top-level Server Error */}
-      {serverError && (
-        <div
-          data-testid="lead-form-server-error"
-          role="alert"
-          style={{
-            padding: `${spacing[3]} ${spacing[4]}`,
-            backgroundColor: colors.error.container,
-            border: `1px solid ${colors.error.main}`,
-            borderRadius: radii.sm,
-            color: colors.error.onContainer,
-            fontSize: typography.styles.caption.fontSize,
-            fontFamily: typography.fontFamilies.sans,
-          }}
-        >
-          {serverError}
-        </div>
-      )}
-
-      {/* Title Field (Required) */}
-      <div style={{ display: 'flex', flexDirection: 'column', gap: spacing[1] }}>
-        <label
-          htmlFor="lead-title"
-          style={{
-            ...typography.styles.labelCaps,
-            color: titleError ? colors.error.main : colors.surface.onSurfaceVariant,
-            display: 'flex',
-            alignItems: 'center',
-            gap: spacing[1],
-          }}
-        >
-          Title
-          <span style={{ color: colors.error.main }}>*</span>
-        </label>
-        <input
-          id="lead-title"
-          name="title"
-          type="text"
-          disabled={isLoading}
-          value={formData.title}
-          onChange={(e) => handleChange('title', e.target.value)}
-          onBlur={() => handleBlur('title')}
-          aria-invalid={!!titleError}
-          aria-describedby={titleError ? 'lead-title-error' : undefined}
-          data-testid="lead-title-input"
-          placeholder="e.g. Enterprise Software License"
-          style={{
-            padding: `${spacing[2]} ${spacing[3]}`,
-            fontSize: typography.styles.bodyMd.fontSize,
-            fontFamily: typography.fontFamilies.sans,
-            borderRadius: radii.sm,
-            border: `1px solid ${titleError ? colors.error.main : colors.surface.outlineVariant}`,
-            backgroundColor: colors.surface.containerLowest,
-            color: colors.surface.onSurface,
-            outline: 'none',
-            transition: 'border-color 0.2s ease',
-          }}
-        />
-        {titleError && (
-          <span
-            id="lead-title-error"
-            data-testid="lead-title-error"
-            role="alert"
+      <form onSubmit={handleSubmit} noValidate aria-labelledby={headerTitleId}>
+        <div style={{ marginBottom: spacing.lg }}>
+          <h2
+            id={headerTitleId}
             style={{
-              color: colors.error.main,
-              fontSize: typography.styles.caption.fontSize,
-              fontFamily: typography.fontFamilies.sans,
-            }}
-          >
-            {titleError}
-          </span>
-        )}
-      </div>
-
-      {/* Company Dropdown (Nullable) */}
-      <div style={{ display: 'flex', flexDirection: 'column', gap: spacing[1] }}>
-        <label
-          htmlFor="lead-company"
-          style={{
-            ...typography.styles.labelCaps,
-            color: colors.surface.onSurfaceVariant,
-          }}
-        >
-          Company
-        </label>
-        <select
-          id="lead-company"
-          name="company_id"
-          disabled={isLoading}
-          value={formData.company_id ?? ''}
-          onChange={(e) =>
-            handleChange('company_id', e.target.value ? Number(e.target.value) : null)
-          }
-          onBlur={() => handleBlur('company_id')}
-          data-testid="lead-company-select"
-          style={{
-            padding: `${spacing[2]} ${spacing[3]}`,
-            fontSize: typography.styles.bodyMd.fontSize,
-            fontFamily: typography.fontFamilies.sans,
-            borderRadius: radii.sm,
-            border: `1px solid ${colors.surface.outlineVariant}`,
-            backgroundColor: colors.surface.containerLowest,
-            color: colors.surface.onSurface,
-            outline: 'none',
-          }}
-        >
-          <option value="">Unassigned / No company</option>
-          {companies.map((company) => (
-            <option key={company.id} value={company.id}>
-              {company.name}
-            </option>
-          ))}
-        </select>
-      </div>
-
-      {/* Contact Dropdown (Nullable) */}
-      <div style={{ display: 'flex', flexDirection: 'column', gap: spacing[1] }}>
-        <label
-          htmlFor="lead-contact"
-          style={{
-            ...typography.styles.labelCaps,
-            color: colors.surface.onSurfaceVariant,
-          }}
-        >
-          Contact
-        </label>
-        <select
-          id="lead-contact"
-          name="contact_id"
-          disabled={isLoading}
-          value={formData.contact_id ?? ''}
-          onChange={(e) =>
-            handleChange('contact_id', e.target.value ? Number(e.target.value) : null)
-          }
-          onBlur={() => handleBlur('contact_id')}
-          data-testid="lead-contact-select"
-          style={{
-            padding: `${spacing[2]} ${spacing[3]}`,
-            fontSize: typography.styles.bodyMd.fontSize,
-            fontFamily: typography.fontFamilies.sans,
-            borderRadius: radii.sm,
-            border: `1px solid ${colors.surface.outlineVariant}`,
-            backgroundColor: colors.surface.containerLowest,
-            color: colors.surface.onSurface,
-            outline: 'none',
-          }}
-        >
-          <option value="">Unassigned / No contact</option>
-          {contacts.map((contact) => (
-            <option key={contact.id} value={contact.id}>
-              {contact.name}
-            </option>
-          ))}
-        </select>
-      </div>
-
-      {/* Value Field (Required, numeric >= 0) */}
-      <div style={{ display: 'flex', flexDirection: 'column', gap: spacing[1] }}>
-        <label
-          htmlFor="lead-value"
-          style={{
-            ...typography.styles.labelCaps,
-            color: valueError ? colors.error.main : colors.surface.onSurfaceVariant,
-            display: 'flex',
-            alignItems: 'center',
-            gap: spacing[1],
-          }}
-        >
-          Value ($)
-          <span style={{ color: colors.error.main }}>*</span>
-        </label>
-        <input
-          id="lead-value"
-          name="value"
-          type="number"
-          step="any"
-          disabled={isLoading}
-          value={formData.value}
-          onChange={(e) => handleChange('value', e.target.value)}
-          onBlur={() => handleBlur('value')}
-          aria-invalid={!!valueError}
-          aria-describedby={valueError ? 'lead-value-error' : undefined}
-          data-testid="lead-value-input"
-          placeholder="e.g. 50000"
-          style={{
-            padding: `${spacing[2]} ${spacing[3]}`,
-            fontSize: typography.styles.bodyMd.fontSize,
-            fontFamily: typography.fontFamilies.sans,
-            borderRadius: radii.sm,
-            border: `1px solid ${valueError ? colors.error.main : colors.surface.outlineVariant}`,
-            backgroundColor: colors.surface.containerLowest,
-            color: colors.surface.onSurface,
-            outline: 'none',
-            transition: 'border-color 0.2s ease',
-          }}
-        />
-        {valueError && (
-          <span
-            id="lead-value-error"
-            data-testid="lead-value-error"
-            role="alert"
-            style={{
-              color: colors.error.main,
-              fontSize: typography.styles.caption.fontSize,
-              fontFamily: typography.fontFamilies.sans,
-            }}
-          >
-            {valueError}
-          </span>
-        )}
-      </div>
-
-      {/* Status Dropdown */}
-      <div style={{ display: 'flex', flexDirection: 'column', gap: spacing[1] }}>
-        <label
-          htmlFor="lead-status"
-          style={{
-            ...typography.styles.labelCaps,
-            color: statusError ? colors.error.main : colors.surface.onSurfaceVariant,
-          }}
-        >
-          Status
-        </label>
-        <select
-          id="lead-status"
-          name="status"
-          disabled={isLoading}
-          value={formData.status}
-          onChange={(e) => handleChange('status', e.target.value)}
-          onBlur={() => handleBlur('status')}
-          data-testid="lead-status-select"
-          style={{
-            padding: `${spacing[2]} ${spacing[3]}`,
-            fontSize: typography.styles.bodyMd.fontSize,
-            fontFamily: typography.fontFamilies.sans,
-            borderRadius: radii.sm,
-            border: `1px solid ${statusError ? colors.error.main : colors.surface.outlineVariant}`,
-            backgroundColor: colors.surface.containerLowest,
-            color: colors.surface.onSurface,
-            outline: 'none',
-          }}
-        >
-          {LEAD_STATUS_OPTIONS.map((status) => (
-            <option key={status} value={status}>
-              {status}
-            </option>
-          ))}
-        </select>
-        {statusError && (
-          <span
-            id="lead-status-error"
-            data-testid="lead-status-error"
-            role="alert"
-            style={{
-              color: colors.error.main,
-              fontSize: typography.styles.caption.fontSize,
-              fontFamily: typography.fontFamilies.sans,
-            }}
-          >
-            {statusError}
-          </span>
-        )}
-      </div>
-
-      {/* Expected Close Date Field (Nullable) */}
-      <div style={{ display: 'flex', flexDirection: 'column', gap: spacing[1] }}>
-        <label
-          htmlFor="lead-expected-close-date"
-          style={{
-            ...typography.styles.labelCaps,
-            color: colors.surface.onSurfaceVariant,
-          }}
-        >
-          Expected Close Date
-        </label>
-        <input
-          id="lead-expected-close-date"
-          name="expected_close_date"
-          type="date"
-          disabled={isLoading}
-          value={formData.expected_close_date || ''}
-          onChange={(e) => handleChange('expected_close_date', e.target.value || null)}
-          onBlur={() => handleBlur('expected_close_date')}
-          data-testid="lead-expected-close-date-input"
-          style={{
-            padding: `${spacing[2]} ${spacing[3]}`,
-            fontSize: typography.styles.bodyMd.fontSize,
-            fontFamily: typography.fontFamilies.sans,
-            borderRadius: radii.sm,
-            border: `1px solid ${colors.surface.outlineVariant}`,
-            backgroundColor: colors.surface.containerLowest,
-            color: colors.surface.onSurface,
-            outline: 'none',
-          }}
-        />
-      </div>
-
-      {/* Form Action Buttons */}
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'flex-end',
-          gap: spacing[3],
-          marginTop: spacing[2],
-        }}
-      >
-        {onCancel && (
-          <button
-            type="button"
-            onClick={onCancel}
-            disabled={isLoading}
-            data-testid="lead-cancel-button"
-            style={{
-              padding: `${spacing[2]} ${spacing[4]}`,
-              fontSize: typography.styles.bodyMd.fontSize,
-              fontFamily: typography.fontFamilies.sans,
-              fontWeight: 500,
-              borderRadius: radii.sm,
-              border: `1px solid ${colors.surface.outlineVariant}`,
-              backgroundColor: 'transparent',
+              fontFamily: typography.fontFamily.serif,
+              fontSize: typography.sizes['headline-sm'].fontSize,
+              fontWeight: typography.sizes['headline-sm'].fontWeight,
+              lineHeight: typography.sizes['headline-sm'].lineHeight,
               color: colors.surface.onSurface,
-              cursor: isLoading ? 'not-allowed' : 'pointer',
-              opacity: isLoading ? 0.6 : 1,
+              margin: 0,
             }}
           >
-            {cancelLabel}
-          </button>
+            {displayTitle}
+          </h2>
+        </div>
+
+        {apiErrorMessage && (
+          <div style={{ marginBottom: spacing.lg }}>
+            <ErrorAlert
+              title="Failed to save lead"
+              message={apiErrorMessage}
+              dismissible={false}
+            />
+          </div>
         )}
-        <button
-          type="submit"
-          disabled={isLoading}
-          data-testid="lead-submit-button"
+
+        <div style={{ display: 'flex', flexDirection: 'column', gap: spacing.lg }}>
+          {/* Lead Title (Required FR-3, FR-12) */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: spacing.xs }}>
+            <label
+              htmlFor={titleInputId}
+              style={{
+                fontFamily: typography.fontFamily.sans,
+                fontSize: typography.sizes.caption.fontSize,
+                fontWeight: 600,
+                color: colors.surface.onSurface,
+                letterSpacing: '0.02em',
+              }}
+            >
+              Lead Title{' '}
+              <span aria-hidden="true" style={{ color: colors.error }}>
+                *
+              </span>
+            </label>
+            <input
+              id={titleInputId}
+              name="title"
+              type="text"
+              required
+              aria-required="true"
+              aria-invalid={!!errors.title}
+              aria-describedby={errors.title ? `${titleInputId}-error` : undefined}
+              value={formData.title}
+              onChange={handleChange}
+              onBlur={handleBlur}
+              placeholder="e.g. Q4 Enterprise License Deal"
+              disabled={pending}
+              style={{
+                fontFamily: typography.fontFamily.sans,
+                fontSize: typography.sizes['body-md'].fontSize,
+                padding: '10px 12px',
+                borderRadius: rounded.DEFAULT,
+                border: `1px solid ${errors.title ? colors.error : colors.borderVariant}`,
+                backgroundColor: pending ? colors.surface.containerLow : colors.surface.containerLowest,
+                color: colors.surface.onSurface,
+                outline: 'none',
+                transition: 'border-color 0.15s ease',
+              }}
+            />
+            {errors.title && (
+              <p
+                id={`${titleInputId}-error`}
+                role="alert"
+                style={{
+                  fontFamily: typography.fontFamily.sans,
+                  fontSize: typography.sizes.caption.fontSize,
+                  color: colors.error,
+                  margin: 0,
+                  marginTop: '2px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '4px',
+                }}
+              >
+                <svg
+                  width="14"
+                  height="14"
+                  viewBox="0 0 20 20"
+                  fill="currentColor"
+                  aria-hidden="true"
+                >
+                  <path
+                    fillRule="evenodd"
+                    d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z"
+                    clipRule="evenodd"
+                  />
+                </svg>
+                {errors.title}
+              </p>
+            )}
+          </div>
+
+          {/* Company Dropdown (Nullable FR-3) */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: spacing.xs }}>
+            <label
+              htmlFor={companySelectId}
+              style={{
+                fontFamily: typography.fontFamily.sans,
+                fontSize: typography.sizes.caption.fontSize,
+                fontWeight: 600,
+                color: colors.surface.onSurface,
+                letterSpacing: '0.02em',
+              }}
+            >
+              Company (Optional)
+            </label>
+            <select
+              id={companySelectId}
+              name="company_id"
+              value={formData.company_id ?? ''}
+              onChange={handleChange}
+              onBlur={handleBlur}
+              disabled={pending}
+              style={{
+                fontFamily: typography.fontFamily.sans,
+                fontSize: typography.sizes['body-md'].fontSize,
+                padding: '10px 12px',
+                borderRadius: rounded.DEFAULT,
+                border: `1px solid ${colors.borderVariant}`,
+                backgroundColor: pending ? colors.surface.containerLow : colors.surface.containerLowest,
+                color: colors.surface.onSurface,
+                outline: 'none',
+                cursor: pending ? 'not-allowed' : 'pointer',
+              }}
+            >
+              <option value="">-- No Company --</option>
+              {companies.map((comp) => (
+                <option key={comp.id} value={comp.id}>
+                  {comp.name}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {/* Contact Dropdown (Nullable FR-3) */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: spacing.xs }}>
+            <label
+              htmlFor={contactSelectId}
+              style={{
+                fontFamily: typography.fontFamily.sans,
+                fontSize: typography.sizes.caption.fontSize,
+                fontWeight: 600,
+                color: colors.surface.onSurface,
+                letterSpacing: '0.02em',
+              }}
+            >
+              Contact (Optional)
+            </label>
+            <select
+              id={contactSelectId}
+              name="contact_id"
+              value={formData.contact_id ?? ''}
+              onChange={handleChange}
+              onBlur={handleBlur}
+              disabled={pending}
+              style={{
+                fontFamily: typography.fontFamily.sans,
+                fontSize: typography.sizes['body-md'].fontSize,
+                padding: '10px 12px',
+                borderRadius: rounded.DEFAULT,
+                border: `1px solid ${colors.borderVariant}`,
+                backgroundColor: pending ? colors.surface.containerLow : colors.surface.containerLowest,
+                color: colors.surface.onSurface,
+                outline: 'none',
+                cursor: pending ? 'not-allowed' : 'pointer',
+              }}
+            >
+              <option value="">-- No Contact --</option>
+              {contacts.map((contact) => (
+                <option key={contact.id} value={contact.id}>
+                  {contact.name}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {/* Lead Value (Required FR-3, FR-12, Edge Case 8) */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: spacing.xs }}>
+            <label
+              htmlFor={valueInputId}
+              style={{
+                fontFamily: typography.fontFamily.sans,
+                fontSize: typography.sizes.caption.fontSize,
+                fontWeight: 600,
+                color: colors.surface.onSurface,
+                letterSpacing: '0.02em',
+              }}
+            >
+              Value ($){' '}
+              <span aria-hidden="true" style={{ color: colors.error }}>
+                *
+              </span>
+            </label>
+            <input
+              id={valueInputId}
+              name="value"
+              type="number"
+              step="any"
+              min="0"
+              required
+              aria-required="true"
+              aria-invalid={!!errors.value}
+              aria-describedby={errors.value ? `${valueInputId}-error` : undefined}
+              value={formData.value}
+              onChange={handleChange}
+              onBlur={handleBlur}
+              placeholder="e.g. 25000"
+              disabled={pending}
+              style={{
+                fontFamily: typography.fontFamily.sans,
+                fontSize: typography.sizes['body-md'].fontSize,
+                padding: '10px 12px',
+                borderRadius: rounded.DEFAULT,
+                border: `1px solid ${errors.value ? colors.error : colors.borderVariant}`,
+                backgroundColor: pending ? colors.surface.containerLow : colors.surface.containerLowest,
+                color: colors.surface.onSurface,
+                outline: 'none',
+                transition: 'border-color 0.15s ease',
+              }}
+            />
+            {errors.value && (
+              <p
+                id={`${valueInputId}-error`}
+                role="alert"
+                style={{
+                  fontFamily: typography.fontFamily.sans,
+                  fontSize: typography.sizes.caption.fontSize,
+                  color: colors.error,
+                  margin: 0,
+                  marginTop: '2px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '4px',
+                }}
+              >
+                <svg
+                  width="14"
+                  height="14"
+                  viewBox="0 0 20 20"
+                  fill="currentColor"
+                  aria-hidden="true"
+                >
+                  <path
+                    fillRule="evenodd"
+                    d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z"
+                    clipRule="evenodd"
+                  />
+                </svg>
+                {errors.value}
+              </p>
+            )}
+          </div>
+
+          {/* Pipeline Status (FR-3) */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: spacing.xs }}>
+            <label
+              htmlFor={statusSelectId}
+              style={{
+                fontFamily: typography.fontFamily.sans,
+                fontSize: typography.sizes.caption.fontSize,
+                fontWeight: 600,
+                color: colors.surface.onSurface,
+                letterSpacing: '0.02em',
+              }}
+            >
+              Status
+            </label>
+            <select
+              id={statusSelectId}
+              name="status"
+              value={formData.status}
+              onChange={handleChange}
+              onBlur={handleBlur}
+              disabled={pending}
+              style={{
+                fontFamily: typography.fontFamily.sans,
+                fontSize: typography.sizes['body-md'].fontSize,
+                padding: '10px 12px',
+                borderRadius: rounded.DEFAULT,
+                border: `1px solid ${errors.status ? colors.error : colors.borderVariant}`,
+                backgroundColor: pending ? colors.surface.containerLow : colors.surface.containerLowest,
+                color: colors.surface.onSurface,
+                outline: 'none',
+                cursor: pending ? 'not-allowed' : 'pointer',
+              }}
+            >
+              {statuses.map((statusOption) => (
+                <option key={statusOption} value={statusOption}>
+                  {statusOption}
+                </option>
+              ))}
+            </select>
+            {errors.status && (
+              <p
+                id={`${statusSelectId}-error`}
+                role="alert"
+                style={{
+                  fontFamily: typography.fontFamily.sans,
+                  fontSize: typography.sizes.caption.fontSize,
+                  color: colors.error,
+                  margin: 0,
+                  marginTop: '2px',
+                }}
+              >
+                {errors.status}
+              </p>
+            )}
+          </div>
+
+          {/* Expected Close Date */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: spacing.xs }}>
+            <label
+              htmlFor={dateInputId}
+              style={{
+                fontFamily: typography.fontFamily.sans,
+                fontSize: typography.sizes.caption.fontSize,
+                fontWeight: 600,
+                color: colors.surface.onSurface,
+                letterSpacing: '0.02em',
+              }}
+            >
+              Expected Close Date
+            </label>
+            <input
+              id={dateInputId}
+              name="expected_close_date"
+              type="date"
+              value={formData.expected_close_date}
+              onChange={handleChange}
+              onBlur={handleBlur}
+              disabled={pending}
+              style={{
+                fontFamily: typography.fontFamily.sans,
+                fontSize: typography.sizes['body-md'].fontSize,
+                padding: '10px 12px',
+                borderRadius: rounded.DEFAULT,
+                border: `1px solid ${colors.borderVariant}`,
+                backgroundColor: pending ? colors.surface.containerLow : colors.surface.containerLowest,
+                color: colors.surface.onSurface,
+                outline: 'none',
+              }}
+            />
+          </div>
+
+          {/* Owner */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: spacing.xs }}>
+            <label
+              htmlFor={ownerInputId}
+              style={{
+                fontFamily: typography.fontFamily.sans,
+                fontSize: typography.sizes.caption.fontSize,
+                fontWeight: 600,
+                color: colors.surface.onSurface,
+                letterSpacing: '0.02em',
+              }}
+            >
+              Owner
+            </label>
+            <input
+              id={ownerInputId}
+              name="owner"
+              type="text"
+              value={formData.owner}
+              onChange={handleChange}
+              onBlur={handleBlur}
+              placeholder="e.g. Alex Rep"
+              disabled={pending}
+              style={{
+                fontFamily: typography.fontFamily.sans,
+                fontSize: typography.sizes['body-md'].fontSize,
+                padding: '10px 12px',
+                borderRadius: rounded.DEFAULT,
+                border: `1px solid ${colors.borderVariant}`,
+                backgroundColor: pending ? colors.surface.containerLow : colors.surface.containerLowest,
+                color: colors.surface.onSurface,
+                outline: 'none',
+              }}
+            />
+          </div>
+
+          {/* Notes */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: spacing.xs }}>
+            <label
+              htmlFor={notesInputId}
+              style={{
+                fontFamily: typography.fontFamily.sans,
+                fontSize: typography.sizes.caption.fontSize,
+                fontWeight: 600,
+                color: colors.surface.onSurface,
+                letterSpacing: '0.02em',
+              }}
+            >
+              Notes
+            </label>
+            <textarea
+              id={notesInputId}
+              name="notes"
+              rows={3}
+              value={formData.notes}
+              onChange={handleChange}
+              onBlur={handleBlur}
+              placeholder="Additional background or deal particulars..."
+              disabled={pending}
+              style={{
+                fontFamily: typography.fontFamily.sans,
+                fontSize: typography.sizes['body-md'].fontSize,
+                padding: '10px 12px',
+                borderRadius: rounded.DEFAULT,
+                border: `1px solid ${colors.borderVariant}`,
+                backgroundColor: pending ? colors.surface.containerLow : colors.surface.containerLowest,
+                color: colors.surface.onSurface,
+                outline: 'none',
+                resize: 'vertical',
+              }}
+            />
+          </div>
+        </div>
+
+        {/* Action Buttons */}
+        <div
           style={{
-            padding: `${spacing[2]} ${spacing[5]}`,
-            fontSize: typography.styles.bodyMd.fontSize,
-            fontFamily: typography.fontFamilies.sans,
-            fontWeight: 500,
-            borderRadius: radii.sm,
-            border: 'none',
-            backgroundColor: colors.accent.primary,
-            color: colors.accent.onPrimary,
-            cursor: isLoading ? 'not-allowed' : 'pointer',
-            opacity: isLoading ? 0.6 : 1,
-            boxShadow: '0 2px 4px rgba(115, 92, 65, 0.1)',
+            display: 'flex',
+            justifyContent: 'flex-end',
+            alignItems: 'center',
+            gap: spacing.md,
+            marginTop: spacing.xl,
+            paddingTop: spacing.lg,
+            borderTop: `1px solid ${colors.surface.containerHigh}`,
           }}
         >
-          {isLoading ? 'Saving...' : submitLabel}
-        </button>
-      </div>
-    </form>
+          {onCancel && (
+            <button
+              type="button"
+              onClick={onCancel}
+              disabled={pending}
+              style={{
+                fontFamily: typography.fontFamily.sans,
+                fontSize: typography.sizes['body-md'].fontSize,
+                fontWeight: 500,
+                padding: '10px 20px',
+                borderRadius: rounded.DEFAULT,
+                border: `1px solid ${colors.borderVariant}`,
+                backgroundColor: 'transparent',
+                color: colors.surface.onSurface,
+                cursor: pending ? 'not-allowed' : 'pointer',
+                opacity: pending ? 0.6 : 1,
+              }}
+            >
+              Cancel
+            </button>
+          )}
+
+          <button
+            type="submit"
+            disabled={pending}
+            style={{
+              fontFamily: typography.fontFamily.sans,
+              fontSize: typography.sizes['body-md'].fontSize,
+              fontWeight: 600,
+              padding: '10px 24px',
+              borderRadius: rounded.DEFAULT,
+              border: 'none',
+              backgroundColor: colors.accent.DEFAULT,
+              color: colors.accent.onAccent,
+              cursor: pending ? 'not-allowed' : 'pointer',
+              opacity: pending ? 0.7 : 1,
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: spacing.xs,
+              transition: 'background-color 0.15s ease',
+            }}
+          >
+            {pending ? (
+              <>
+                <svg
+                  style={{
+                    animation: 'spin 1s linear infinite',
+                    width: '16px',
+                    height: '16px',
+                  }}
+                  xmlns="http://www.w3.org/2000/svg"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                >
+                  <circle
+                    style={{ opacity: 0.25 }}
+                    cx="12"
+                    cy="12"
+                    r="10"
+                    stroke="currentColor"
+                    strokeWidth="4"
+                  />
+                  <path
+                    style={{ opacity: 0.75 }}
+                    fill="currentColor"
+                    d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+                  />
+                </svg>
+                Saving...
+              </>
+            ) : (
+              displaySubmitLabel
+            )}
+          </button>
+        </div>
+      </form>
+    </div>
   );
 };

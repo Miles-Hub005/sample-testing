@@ -1,471 +1,367 @@
 'use client';
 
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import Link from 'next/link';
-import { colors, radii, shadows, spacing, typography } from '../../lib/tokens';
+import { colors, rounded, shadows, spacing, typography } from '@/lib/tokens';
+import { formatCurrency, formatDate } from '@/lib/format';
+import { DataTable, Column } from '@/components/crm/DataTable';
+import { LeadForm, LeadFormData, CompanyOption, ContactOption, DEFAULT_LEAD_STATUSES } from '@/components/crm/LeadForm';
+import { StatusBadge } from '@/components/shared/StatusBadge';
+import { ConfirmationDialog } from '@/components/shared/ConfirmationDialog';
+import { ErrorAlert, SuccessAlert } from '@/components/shared/Alerts';
+import { LoadingState } from '@/components/shared/States';
 import {
-  leadsApi,
-  companiesApi,
-  contactsApi,
-  Lead,
-  LeadCreate,
-  LeadUpdate,
-  LeadQueryParams,
-  Company,
-  Contact,
-} from '../../services/crm';
-import { DataTable, DataTableColumn } from '../../components/crm/DataTable';
-import {
-  LeadForm,
-  LeadFormData,
-  CompanyOption,
-  ContactOption,
-  LEAD_STATUS_OPTIONS,
-} from '../../components/crm/LeadForm';
-import { ConfirmationDialog } from '../../components/shared/ConfirmationDialog';
-import { Alert } from '../../components/shared/Alerts';
-import { StatusBadge } from '../../components/shared/StatusBadge';
-import { formatDate } from '../../lib/format';
+  getPaginatedLeads,
+  getLead,
+  createLead,
+  updateLead,
+  deleteLead,
+  listCompanies,
+  listContacts,
+  LeadRead,
+  CompanyRead,
+  ContactRead,
+  CRMApiError,
+} from '@/services/crm';
 
-interface ModalProps {
-  isOpen: boolean;
-  onClose: () => void;
-  title: string;
-  children: React.ReactNode;
-  maxWidth?: string;
-  'data-testid'?: string;
-}
-
-const Modal: React.FC<ModalProps> = ({
-  isOpen,
-  onClose,
-  title,
-  children,
-  maxWidth = '640px',
-  'data-testid': testId = 'modal',
-}) => {
-  useEffect(() => {
-    if (!isOpen) return;
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        onClose();
-      }
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isOpen, onClose]);
-
-  useEffect(() => {
-    if (isOpen) {
-      const originalOverflow = document.body.style.overflow;
-      document.body.style.overflow = 'hidden';
-      return () => {
-        document.body.style.overflow = originalOverflow;
-      };
-    }
-  }, [isOpen]);
-
-  if (!isOpen) return null;
-
-  return (
-    <div
-      data-testid={testId}
-      onClick={(e) => {
-        if (e.target === e.currentTarget) onClose();
-      }}
-      style={{
-        position: 'fixed',
-        top: 0,
-        left: 0,
-        right: 0,
-        bottom: 0,
-        width: '100vw',
-        height: '100vh',
-        backgroundColor: 'rgba(27, 28, 25, 0.5)',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        zIndex: 1000,
-        padding: spacing[4],
-      }}
-    >
-      <div
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="modal-title"
-        style={{
-          backgroundColor: colors.surface.containerLowest,
-          borderRadius: radii.lg,
-          boxShadow: shadows.lifted,
-          border: `1px solid ${colors.surface.outlineVariant}`,
-          width: '100%',
-          maxWidth,
-          maxHeight: '90vh',
-          display: 'flex',
-          flexDirection: 'column',
-          overflow: 'hidden',
-        }}
-      >
-        <header
-          style={{
-            padding: `${spacing[4]} ${spacing[6]}`,
-            borderBottom: `1px solid ${colors.surface.outlineVariant}`,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-          }}
-        >
-          <h2
-            id="modal-title"
-            style={{
-              fontFamily: typography.styles.headlineSm.fontFamily,
-              fontSize: typography.styles.headlineSm.fontSize,
-              fontWeight: typography.styles.headlineSm.fontWeight,
-              color: colors.surface.onSurface,
-              margin: 0,
-            }}
-          >
-            {title}
-          </h2>
-          <button
-            onClick={onClose}
-            aria-label="Close modal"
-            style={{
-              background: 'none',
-              border: 'none',
-              fontSize: '18px',
-              fontWeight: 'bold',
-              color: colors.surface.onSurfaceVariant,
-              cursor: 'pointer',
-              padding: spacing[1],
-              lineHeight: 1,
-            }}
-          >
-            ✕
-          </button>
-        </header>
-        <div
-          style={{
-            padding: spacing[6],
-            overflowY: 'auto',
-            flex: 1,
-          }}
-        >
-          {children}
-        </div>
-      </div>
-    </div>
-  );
-};
-
+/**
+ * LeadsPage Component
+ * Route segment for `/leads`
+ * Displays a DataTable of leads with search, sort, status filter, and pagination.
+ * Offers Add Lead, Detail View, Edit Lead, and Delete Lead modals.
+ * Satisfies FR-3 (Leads CRUD with pipeline status), FR-10 (Breadcrumbs/Navigation), and FR-14 (Empty States).
+ */
 export default function LeadsPage() {
-  const [leads, setLeads] = useState<Lead[]>([]);
-  const [companies, setCompanies] = useState<Company[]>([]);
-  const [contacts, setContacts] = useState<Contact[]>([]);
-  const [totalItems, setTotalItems] = useState(0);
-  const [page, setPage] = useState(1);
-  const [pageSize] = useState(20);
-  const [sortBy, setSortBy] = useState('title');
-  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
-  const [searchQuery, setSearchQuery] = useState('');
-  const [statusFilter, setStatusFilter] = useState('');
-  const [isLoading, setIsLoading] = useState(true);
-  const [pageError, setPageError] = useState<string | null>(null);
+  // Data state
+  const [leads, setLeads] = useState<LeadRead[]>([]);
+  const [totalItems, setTotalItems] = useState<number>(0);
+  const [page, setPage] = useState<number>(1);
+  const [pageSize, setPageSize] = useState<number>(20);
+  const [searchValue, setSearchValue] = useState<string>('');
+  const [statusFilter, setStatusFilter] = useState<string>('');
+  const [sortColumn, setSortColumn] = useState<string>('title');
+  const [sortDirection, setSortDirection] = useState<'asc' | 'desc' | null>('asc');
+
+  // Company and Contact options for dropdowns and name lookup maps
+  const [companies, setCompanies] = useState<CompanyOption[]>([]);
+  const [contacts, setContacts] = useState<ContactOption[]>([]);
+
+  // Loading & error states
+  const [loading, setLoading] = useState<boolean>(true);
+  const [error, setError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
-  // Modal states
-  const [isAddModalOpen, setIsAddModalOpen] = useState(false);
-  const [editingLead, setEditingLead] = useState<Lead | null>(null);
-  const [viewingLead, setViewingLead] = useState<Lead | null>(null);
-  const [isDetailLoading, setIsDetailLoading] = useState(false);
+  // Modal & Selection states
+  const [isAddModalOpen, setIsAddModalOpen] = useState<boolean>(false);
+  const [isEditModalOpen, setIsEditModalOpen] = useState<boolean>(false);
+  const [isDetailModalOpen, setIsDetailModalOpen] = useState<boolean>(false);
+  const [isDeleteModalOpen, setIsDeleteModalOpen] = useState<boolean>(false);
 
-  // Deletion state
-  const [deletingLead, setDeletingLead] = useState<Lead | null>(null);
-  const [deleteError, setDeleteError] = useState<string | null>(null);
-  const [isDeleting, setIsDeleting] = useState(false);
+  const [selectedLead, setSelectedLead] = useState<LeadRead | null>(null);
+  const [leadDetail, setLeadDetail] = useState<LeadRead | null>(null);
 
-  // Form submission state
-  const [isSubmitting, setIsSubmitting] = useState(false);
-  const [formServerError, setFormServerError] = useState<string | null>(null);
-  const [formFieldErrors, setFormFieldErrors] = useState<Record<string, string>>({});
+  const [isDetailLoading, setIsDetailLoading] = useState<boolean>(false);
+  const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
+  const [isDeleting, setIsDeleting] = useState<boolean>(false);
+  const [formApiError, setFormApiError] = useState<CRMApiError | string | null>(null);
 
-  const companyOptions: CompanyOption[] = useMemo(() => {
-    return companies.map((c) => ({ id: c.id, name: c.name }));
-  }, [companies]);
-
+  // Map of company ID to company name for fast lookup
   const companyMap = useMemo(() => {
     const map: Record<number, string> = {};
-    companies.forEach((c) => {
-      map[c.id] = c.name;
+    companies.forEach((comp) => {
+      map[comp.id] = comp.name;
     });
     return map;
   }, [companies]);
 
-  const contactOptions: ContactOption[] = useMemo(() => {
-    return contacts.map((c) => ({ id: c.id, name: c.name }));
-  }, [contacts]);
-
+  // Map of contact ID to contact name for fast lookup
   const contactMap = useMemo(() => {
     const map: Record<number, string> = {};
-    contacts.forEach((c) => {
-      map[c.id] = c.name;
+    contacts.forEach((cont) => {
+      map[cont.id] = cont.name;
     });
     return map;
   }, [contacts]);
 
+  // Fetch company options for dropdown and display
   const fetchCompanies = useCallback(async () => {
     try {
-      const response = await companiesApi.list({ page: 1, page_size: 100 });
-      if (response.data) {
-        if ('items' in response.data && Array.isArray(response.data.items)) {
-          setCompanies(response.data.items);
-        } else if (Array.isArray(response.data)) {
-          setCompanies(response.data);
-        }
+      const companyList: CompanyRead[] = await listCompanies({ page_size: 1000 });
+      if (Array.isArray(companyList)) {
+        setCompanies(companyList.map((c) => ({ id: c.id, name: c.name })));
       }
-    } catch (err) {
-      // Ignore company fetch errors, lead form will present empty company dropdown
+    } catch {
+      // Background fetch failure for company list
     }
   }, []);
 
+  // Fetch contact options for dropdown and display
   const fetchContacts = useCallback(async () => {
     try {
-      const response = await contactsApi.list({ page: 1, page_size: 100 });
-      if (response.data) {
-        if ('items' in response.data && Array.isArray(response.data.items)) {
-          setContacts(response.data.items);
-        } else if (Array.isArray(response.data)) {
-          setContacts(response.data);
-        }
+      const contactList: ContactRead[] = await listContacts({ page_size: 1000 });
+      if (Array.isArray(contactList)) {
+        setContacts(contactList.map((c) => ({ id: c.id, name: c.name })));
       }
-    } catch (err) {
-      // Ignore contact fetch errors, lead form will present empty contact dropdown
+    } catch {
+      // Background fetch failure for contact list
     }
   }, []);
-
-  const fetchLeads = useCallback(async () => {
-    setIsLoading(true);
-    setPageError(null);
-    try {
-      const params: LeadQueryParams = {
-        page,
-        page_size: pageSize,
-        sort_by: sortBy,
-        order: sortOrder,
-      };
-      if (searchQuery.trim()) {
-        params.search = searchQuery.trim();
-      }
-      if (statusFilter) {
-        params.status = statusFilter;
-      }
-
-      const response = await leadsApi.list(params);
-      if (response.error) {
-        setPageError(
-          typeof response.error === 'string' ? response.error : 'Failed to load leads'
-        );
-        setLeads([]);
-        setTotalItems(0);
-      } else if (response.data) {
-        if ('items' in response.data && Array.isArray(response.data.items)) {
-          setLeads(response.data.items);
-          setTotalItems(response.data.total ?? response.data.items.length);
-        } else if (Array.isArray(response.data)) {
-          setLeads(response.data);
-          setTotalItems(response.data.length);
-        }
-      }
-    } catch (err) {
-      setPageError(
-        err instanceof Error
-          ? err.message
-          : 'An unexpected error occurred while loading leads.'
-      );
-    } finally {
-      setIsLoading(false);
-    }
-  }, [page, pageSize, sortBy, sortOrder, searchQuery, statusFilter]);
 
   useEffect(() => {
     fetchCompanies();
     fetchContacts();
   }, [fetchCompanies, fetchContacts]);
 
+  // Fetch paginated leads list
+  const fetchLeads = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const sortParam = sortColumn
+        ? sortDirection === 'desc'
+          ? `-${sortColumn}`
+          : sortColumn
+        : undefined;
+
+      const response = await getPaginatedLeads({
+        page,
+        page_size: pageSize,
+        search: searchValue || undefined,
+        sort: sortParam,
+        status: statusFilter || undefined,
+      });
+
+      setLeads(response.items || []);
+      setTotalItems(response.total ?? (response.items ? response.items.length : 0));
+    } catch (err: unknown) {
+      if (err instanceof CRMApiError) {
+        setError(err.message);
+      } else if (err instanceof Error) {
+        setError(err.message);
+      } else {
+        setError('Failed to load leads.');
+      }
+    } finally {
+      setLoading(false);
+    }
+  }, [page, pageSize, searchValue, statusFilter, sortColumn, sortDirection]);
+
   useEffect(() => {
     fetchLeads();
   }, [fetchLeads]);
 
-  const handleViewLead = async (lead: Lead) => {
+  // Modal control helpers
+  const handleOpenAddModal = () => {
+    setFormApiError(null);
+    setIsAddModalOpen(true);
+  };
+
+  const handleCloseAddModal = () => {
+    setIsAddModalOpen(false);
+    setFormApiError(null);
+  };
+
+  const handleOpenEditModal = (lead: LeadRead) => {
+    setSelectedLead(lead);
+    setFormApiError(null);
+    setIsEditModalOpen(true);
+  };
+
+  const handleCloseEditModal = () => {
+    setIsEditModalOpen(false);
+    setSelectedLead(null);
+    setFormApiError(null);
+  };
+
+  const handleOpenDetailModal = async (lead: LeadRead) => {
+    setSelectedLead(lead);
+    setLeadDetail(lead);
+    setIsDetailModalOpen(true);
     setIsDetailLoading(true);
-    setViewingLead({ ...lead });
+
     try {
-      const res = await leadsApi.get(lead.id);
-      if (res.data) {
-        setViewingLead(res.data as Lead);
-      }
-    } catch (err) {
-      // Retain basic lead data if detail fetch fails
+      const detail = await getLead(lead.id);
+      setLeadDetail(detail);
+    } catch {
+      // Fallback to initial selectedLead if detailed fetch fails
     } finally {
       setIsDetailLoading(false);
     }
   };
 
-  const handleCreateSubmit = async (formData: LeadFormData) => {
-    setIsSubmitting(true);
-    setFormServerError(null);
-    setFormFieldErrors({});
-    try {
-      const payload: LeadCreate = {
-        title: formData.title,
-        name: formData.title,
-        company_id: formData.company_id ?? null,
-        contact_id: formData.contact_id ?? null,
-        value: Number(formData.value),
-        status: formData.status || 'Prospecting',
-        expected_close_date: formData.expected_close_date || null,
-        owner: formData.owner || '',
-      };
-      const res = await leadsApi.create(payload);
-      if (res.error) {
-        const errData = res.error as any;
-        if (errData?.fields && Array.isArray(errData.fields)) {
-          const fieldErrMap: Record<string, string> = {};
-          errData.fields.forEach((f: { field: string; message: string }) => {
-            fieldErrMap[f.field] = f.message;
-          });
-          setFormFieldErrors(fieldErrMap);
-        }
-        setFormServerError(errData?.message || 'Failed to create lead.');
-      } else if (res.data) {
-        setIsAddModalOpen(false);
-        const createdTitle = res.data.title || res.data.name || 'Lead';
-        setSuccessMessage(`Lead "${createdTitle}" created successfully.`);
-        fetchLeads();
-      }
-    } catch (err) {
-      setFormServerError(err instanceof Error ? err.message : 'Failed to create lead.');
-    } finally {
-      setIsSubmitting(false);
-    }
+  const handleCloseDetailModal = () => {
+    setIsDetailModalOpen(false);
+    setSelectedLead(null);
+    setLeadDetail(null);
   };
 
-  const handleUpdateSubmit = async (formData: LeadFormData) => {
-    if (!editingLead) return;
-    setIsSubmitting(true);
-    setFormServerError(null);
-    setFormFieldErrors({});
-    try {
-      const payload: LeadUpdate = {
-        title: formData.title,
-        name: formData.title,
-        company_id: formData.company_id ?? null,
-        contact_id: formData.contact_id ?? null,
-        value: Number(formData.value),
-        status: formData.status,
-        expected_close_date: formData.expected_close_date || null,
-        owner: formData.owner || '',
-      };
-      const res = await leadsApi.update(editingLead.id, payload);
-      if (res.error) {
-        const errData = res.error as any;
-        if (errData?.fields && Array.isArray(errData.fields)) {
-          const fieldErrMap: Record<string, string> = {};
-          errData.fields.forEach((f: { field: string; message: string }) => {
-            fieldErrMap[f.field] = f.message;
-          });
-          setFormFieldErrors(fieldErrMap);
-        }
-        setFormServerError(errData?.message || 'Failed to update lead.');
-      } else if (res.data) {
-        setEditingLead(null);
-        const updatedTitle = res.data.title || res.data.name || 'Lead';
-        setSuccessMessage(`Lead "${updatedTitle}" updated successfully.`);
-        fetchLeads();
-        if (viewingLead && viewingLead.id === res.data.id) {
-          handleViewLead(res.data as Lead);
-        }
-      }
-    } catch (err) {
-      setFormServerError(err instanceof Error ? err.message : 'Failed to update lead.');
-    } finally {
-      setIsSubmitting(false);
-    }
+  const handleOpenDeleteModal = (lead: LeadRead) => {
+    setSelectedLead(lead);
+    setIsDeleteModalOpen(true);
   };
 
-  const handleConfirmDelete = async () => {
-    if (!deletingLead) return;
-    setIsDeleting(true);
-    setDeleteError(null);
+  const handleCloseDeleteModal = () => {
+    setIsDeleteModalOpen(false);
+    setSelectedLead(null);
+  };
+
+  // Form submit handlers
+  const handleCreateLead = async (data: LeadFormData) => {
+    setIsSubmitting(true);
+    setFormApiError(null);
     try {
-      const res = await leadsApi.delete(deletingLead.id);
-      if (res.error) {
-        const errData = res.error as any;
-        setDeleteError(errData?.message || 'Failed to delete lead.');
+      await createLead(data);
+      const leadTitle = data.title || 'New Lead';
+      setSuccessMessage(`Lead "${leadTitle.trim()}" created successfully.`);
+      handleCloseAddModal();
+      fetchLeads();
+    } catch (err: unknown) {
+      if (err instanceof CRMApiError) {
+        setFormApiError(err);
+      } else if (err instanceof Error) {
+        setFormApiError(err.message);
       } else {
-        const deletedTitle = deletingLead.title || deletingLead.name || 'Lead';
-        setDeletingLead(null);
-        setSuccessMessage(`Lead "${deletedTitle}" deleted successfully.`);
-        fetchLeads();
-        if (viewingLead && viewingLead.id === deletingLead.id) {
-          setViewingLead(null);
-        }
+        setFormApiError('Failed to create lead.');
       }
-    } catch (err) {
-      setDeleteError(err instanceof Error ? err.message : 'An error occurred during deletion.');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleUpdateLead = async (data: LeadFormData) => {
+    if (!selectedLead) return;
+    setIsSubmitting(true);
+    setFormApiError(null);
+    try {
+      await updateLead(selectedLead.id, data);
+      const leadTitle = data.title || selectedLead.title || 'Lead';
+      setSuccessMessage(`Lead "${leadTitle.trim()}" updated successfully.`);
+      handleCloseEditModal();
+      fetchLeads();
+    } catch (err: unknown) {
+      if (err instanceof CRMApiError) {
+        setFormApiError(err);
+      } else if (err instanceof Error) {
+        setFormApiError(err.message);
+      } else {
+        setFormApiError('Failed to update lead.');
+      }
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleDeleteLead = async () => {
+    if (!selectedLead) return;
+    setIsDeleting(true);
+    try {
+      await deleteLead(selectedLead.id);
+      const leadTitle = selectedLead.title || selectedLead.name || 'Lead';
+      setSuccessMessage(`Lead "${leadTitle}" deleted successfully.`);
+      handleCloseDeleteModal();
+      fetchLeads();
+    } catch (err: unknown) {
+      if (err instanceof CRMApiError) {
+        setError(`Failed to delete lead: ${err.message}`);
+      } else if (err instanceof Error) {
+        setError(`Failed to delete lead: ${err.message}`);
+      } else {
+        setError('Failed to delete lead.');
+      }
+      handleCloseDeleteModal();
     } finally {
       setIsDeleting(false);
     }
   };
 
-  const columns: DataTableColumn<Lead>[] = [
+  // Status Filter Control element
+  const statusFilterControl = (
+    <div style={{ display: 'flex', alignItems: 'center', gap: spacing.xs }}>
+      <label
+        htmlFor="status-filter-select"
+        style={{
+          fontSize: typography.sizes.caption.fontSize,
+          fontWeight: 500,
+          color: colors.surface.onSurfaceVariant,
+        }}
+      >
+        Filter Status:
+      </label>
+      <select
+        id="status-filter-select"
+        value={statusFilter}
+        onChange={(e) => {
+          setStatusFilter(e.target.value);
+          setPage(1);
+        }}
+        aria-label="Filter leads by status"
+        style={{
+          padding: `${spacing.xs} ${spacing.sm}`,
+          borderRadius: rounded.sm,
+          border: `1px solid ${colors.borderVariant}`,
+          backgroundColor: colors.surface.containerLowest,
+          fontSize: typography.sizes['body-md'].fontSize,
+          color: colors.surface.onSurface,
+          cursor: 'pointer',
+        }}
+      >
+        <option value="">All Statuses</option>
+        {DEFAULT_LEAD_STATUSES.map((status) => (
+          <option key={status} value={status}>
+            {status}
+          </option>
+        ))}
+      </select>
+    </div>
+  );
+
+  // Table columns definition
+  const columns: Column<LeadRead>[] = [
     {
       key: 'title',
-      header: 'Lead Title',
+      header: 'Title',
       sortable: true,
       sortField: 'title',
-      accessor: (lead) => (
-        <button
-          onClick={(e) => {
-            e.stopPropagation();
-            handleViewLead(lead);
-          }}
-          style={{
-            background: 'none',
-            border: 'none',
-            padding: 0,
-            color: colors.accent.primary,
-            fontWeight: 600,
-            cursor: 'pointer',
-            textAlign: 'left',
-            fontFamily: 'inherit',
-            fontSize: 'inherit',
-            textDecoration: 'underline',
-          }}
-          data-testid={`lead-title-link-${lead.id}`}
-        >
-          {lead.title || lead.name || 'Untitled Lead'}
-        </button>
-      ),
-    },
-    {
-      key: 'company',
-      header: 'Company',
-      accessor: (lead) => {
-        if (lead.company_id && companyMap[lead.company_id]) {
-          return companyMap[lead.company_id];
-        }
-        return 'Unassigned';
+      render: (lead) => {
+        const displayTitle = lead.title || lead.name || 'Untitled Lead';
+        return (
+          <button
+            onClick={() => handleOpenDetailModal(lead)}
+            style={{
+              background: 'none',
+              border: 'none',
+              padding: 0,
+              margin: 0,
+              color: colors.accent.DEFAULT,
+              fontWeight: 500,
+              textDecoration: 'none',
+              cursor: 'pointer',
+              textAlign: 'left',
+              fontFamily: 'inherit',
+              fontSize: 'inherit',
+            }}
+            aria-label={`View details for ${displayTitle}`}
+          >
+            {displayTitle}
+          </button>
+        );
       },
     },
     {
-      key: 'contact',
+      key: 'company_id',
+      header: 'Company',
+      render: (lead) => {
+        if (!lead.company_id) return '—';
+        const companyName = companyMap[lead.company_id];
+        return companyName || `Company #${lead.company_id}`;
+      },
+    },
+    {
+      key: 'contact_id',
       header: 'Contact',
-      accessor: (lead) => {
-        if (lead.contact_id && contactMap[lead.contact_id]) {
-          return contactMap[lead.contact_id];
-        }
-        return 'Unassigned';
+      render: (lead) => {
+        if (!lead.contact_id) return '—';
+        const contactName = contactMap[lead.contact_id];
+        return contactName || `Contact #${lead.contact_id}`;
       },
     },
     {
@@ -474,12 +370,9 @@ export default function LeadsPage() {
       sortable: true,
       sortField: 'value',
       align: 'right',
-      accessor: (lead) => {
-        const numVal = typeof lead.value === 'number' ? lead.value : Number(lead.value || 0);
-        return `$${numVal.toLocaleString('en-US', {
-          minimumFractionDigits: 0,
-          maximumFractionDigits: 2,
-        })}`;
+      render: (lead) => {
+        if (lead.value === undefined || lead.value === null) return '—';
+        return formatCurrency(lead.value);
       },
     },
     {
@@ -487,158 +380,114 @@ export default function LeadsPage() {
       header: 'Status',
       sortable: true,
       sortField: 'status',
-      accessor: (lead) => <StatusBadge status={lead.status} size="sm" />,
+      render: (lead) => <StatusBadge label={lead.status} status={lead.status} />,
     },
     {
       key: 'expected_close_date',
       header: 'Expected Close',
       sortable: true,
       sortField: 'expected_close_date',
-      accessor: (lead) => formatDate(lead.expected_close_date, { fallback: '—' }),
+      render: (lead) => formatDate(lead.expected_close_date) || '—',
     },
     {
       key: 'actions',
       header: 'Actions',
       align: 'right',
-      accessor: (lead) => (
-        <div
-          style={{ display: 'flex', gap: spacing[2], justifyContent: 'flex-end' }}
-          onClick={(e) => e.stopPropagation()}
-        >
-          <button
-            onClick={() => handleViewLead(lead)}
-            data-testid={`view-lead-${lead.id}`}
-            style={{
-              backgroundColor: 'transparent',
-              color: colors.surface.onSurface,
-              border: `1px solid ${colors.surface.outlineVariant}`,
-              borderRadius: radii.sm,
-              padding: `${spacing[1]} ${spacing[3]}`,
-              fontSize: typography.styles.caption.fontSize,
-              fontWeight: 500,
-              cursor: 'pointer',
-            }}
+      render: (lead) => {
+        const displayTitle = lead.title || lead.name || 'Lead';
+        return (
+          <div
+            style={{ display: 'flex', gap: spacing.xs, justifyContent: 'flex-end' }}
+            onClick={(e) => e.stopPropagation()}
           >
-            View
-          </button>
-          <button
-            onClick={() => {
-              setEditingLead(lead);
-              setFormServerError(null);
-              setFormFieldErrors({});
-            }}
-            data-testid={`edit-lead-${lead.id}`}
-            style={{
-              backgroundColor: 'transparent',
-              color: colors.accent.primary,
-              border: `1px solid ${colors.surface.outlineVariant}`,
-              borderRadius: radii.sm,
-              padding: `${spacing[1]} ${spacing[3]}`,
-              fontSize: typography.styles.caption.fontSize,
-              fontWeight: 500,
-              cursor: 'pointer',
-            }}
-          >
-            Edit
-          </button>
-          <button
-            onClick={() => {
-              setDeletingLead(lead);
-              setDeleteError(null);
-            }}
-            data-testid={`delete-lead-${lead.id}`}
-            style={{
-              backgroundColor: 'transparent',
-              color: colors.secondary.main,
-              border: `1px solid ${colors.surface.outlineVariant}`,
-              borderRadius: radii.sm,
-              padding: `${spacing[1]} ${spacing[3]}`,
-              fontSize: typography.styles.caption.fontSize,
-              fontWeight: 500,
-              cursor: 'pointer',
-            }}
-          >
-            Delete
-          </button>
-        </div>
-      ),
+            <button
+              onClick={() => handleOpenDetailModal(lead)}
+              style={{
+                padding: `${spacing.xs} ${spacing.sm}`,
+                backgroundColor: colors.surface.containerHigh,
+                border: `1px solid ${colors.borderVariant}`,
+                borderRadius: rounded.sm,
+                fontSize: '13px',
+                cursor: 'pointer',
+                color: colors.surface.onSurface,
+              }}
+              aria-label={`View ${displayTitle}`}
+            >
+              View
+            </button>
+            <button
+              onClick={() => handleOpenEditModal(lead)}
+              style={{
+                padding: `${spacing.xs} ${spacing.sm}`,
+                backgroundColor: colors.surface.containerHigh,
+                border: `1px solid ${colors.borderVariant}`,
+                borderRadius: rounded.sm,
+                fontSize: '13px',
+                cursor: 'pointer',
+                color: colors.surface.onSurface,
+              }}
+              aria-label={`Edit ${displayTitle}`}
+            >
+              Edit
+            </button>
+            <button
+              onClick={() => handleOpenDeleteModal(lead)}
+              style={{
+                padding: `${spacing.xs} ${spacing.sm}`,
+                backgroundColor: colors.error,
+                color: colors.surface.containerLowest,
+                border: 'none',
+                borderRadius: rounded.sm,
+                fontSize: '13px',
+                cursor: 'pointer',
+              }}
+              aria-label={`Delete ${displayTitle}`}
+            >
+              Delete
+            </button>
+          </div>
+        );
+      },
     },
   ];
 
-  const extraToolbar = (
-    <div style={{ display: 'flex', alignItems: 'center', gap: spacing[2] }}>
-      <label
-        htmlFor="status-filter-select"
-        style={{
-          fontSize: typography.styles.caption.fontSize,
-          fontFamily: typography.styles.caption.fontFamily,
-          color: colors.surface.onSurfaceVariant,
-          fontWeight: 500,
-        }}
-      >
-        Status:
-      </label>
-      <select
-        id="status-filter-select"
-        data-testid="status-filter-select"
-        aria-label="Filter leads by status"
-        value={statusFilter}
-        onChange={(e) => {
-          setStatusFilter(e.target.value);
-          setPage(1);
-        }}
-        style={{
-          padding: `${spacing[2]} ${spacing[3]}`,
-          borderRadius: radii.md,
-          border: `1px solid ${colors.surface.outlineVariant}`,
-          backgroundColor: colors.surface.containerLowest,
-          color: colors.surface.onSurface,
-          fontSize: typography.styles.bodyMd.fontSize,
-          fontFamily: typography.styles.bodyMd.fontFamily,
-          cursor: 'pointer',
-        }}
-      >
-        <option value="">All Statuses</option>
-        {LEAD_STATUS_OPTIONS.map((statusOption) => (
-          <option key={statusOption} value={statusOption}>
-            {statusOption}
-          </option>
-        ))}
-      </select>
-    </div>
-  );
-
   return (
-    <div
-      data-testid="leads-page"
-      style={{
-        display: 'flex',
-        flexDirection: 'column',
-        gap: spacing[6],
-      }}
+    <section
+      aria-label="Leads Management"
+      style={{ display: 'flex', flexDirection: 'column', gap: spacing.lg }}
     >
-      {/* Breadcrumb Navigation (FR-10) */}
-      <nav aria-label="Breadcrumb" style={{ marginBottom: `-${spacing[3]}` }}>
+      {/* Breadcrumbs Navigation (FR-10) */}
+      <nav aria-label="Breadcrumb" style={{ marginBottom: `-${spacing.sm}` }}>
         <ol
           style={{
             display: 'flex',
             alignItems: 'center',
-            gap: spacing[2],
+            gap: spacing.xs,
             listStyle: 'none',
-            padding: 0,
             margin: 0,
-            fontFamily: typography.styles.caption.fontFamily,
-            fontSize: typography.styles.caption.fontSize,
+            padding: 0,
+            fontSize: typography.sizes.caption.fontSize,
             color: colors.surface.onSurfaceVariant,
           }}
         >
           <li>
-            <Link href="/" style={{ color: colors.accent.primary, textDecoration: 'none' }}>
-              Home
-            </Link>
+            <a
+              href="/"
+              style={{
+                color: colors.accent.DEFAULT,
+                textDecoration: 'none',
+              }}
+            >
+              Dashboard
+            </a>
           </li>
-          <li>/</li>
-          <li aria-current="page" style={{ fontWeight: 600, color: colors.surface.onSurface }}>
+          <li aria-hidden="true" style={{ color: colors.grays[400] }}>
+            /
+          </li>
+          <li
+            aria-current="page"
+            style={{ fontWeight: 500, color: colors.surface.onSurface }}
+          >
             Leads
           </li>
         </ol>
@@ -648,374 +497,441 @@ export default function LeadsPage() {
       <div
         style={{
           display: 'flex',
-          flexWrap: 'wrap',
-          alignItems: 'center',
           justifyContent: 'space-between',
-          gap: spacing[4],
-          borderBottom: `1px solid ${colors.surface.outlineVariant}`,
-          paddingBottom: spacing[4],
+          alignItems: 'flex-start',
+          flexWrap: 'wrap',
+          gap: spacing.md,
         }}
       >
         <div>
           <h1
             style={{
-              fontFamily: typography.styles.displayLg.fontFamily,
-              fontSize: typography.styles.headlineMd.fontSize,
-              fontWeight: typography.styles.headlineMd.fontWeight,
+              margin: 0,
+              fontFamily: typography.fontFamily.serif,
+              fontSize: typography.sizes['headline-md'].fontSize,
+              fontWeight: typography.sizes['headline-md'].fontWeight,
               color: colors.surface.onSurface,
-              margin: `0 0 ${spacing[1]} 0`,
             }}
           >
             Leads
           </h1>
           <p
             style={{
-              fontFamily: typography.styles.bodyMd.fontFamily,
-              fontSize: typography.styles.bodyMd.fontSize,
+              margin: `${spacing.xs} 0 0 0`,
+              fontSize: typography.sizes['body-md'].fontSize,
               color: colors.surface.onSurfaceVariant,
-              margin: 0,
             }}
           >
-            Manage sales pipeline, track opportunities, and monitor deal statuses.
+            Manage pipeline leads, opportunity values, and deal stages.
           </p>
         </div>
 
         <button
-          onClick={() => {
-            setIsAddModalOpen(true);
-            setFormServerError(null);
-            setFormFieldErrors({});
-          }}
-          data-testid="add-lead-button"
+          onClick={handleOpenAddModal}
           style={{
-            backgroundColor: colors.accent.primary,
-            color: '#ffffff',
+            padding: `${spacing.sm} ${spacing.lg}`,
+            backgroundColor: colors.accent.DEFAULT,
+            color: colors.accent.onAccent,
             border: 'none',
-            borderRadius: radii.md,
-            padding: `${spacing[2]} ${spacing[4]}`,
-            fontFamily: typography.styles.labelCaps.fontFamily,
-            fontSize: typography.styles.bodyMd.fontSize,
-            fontWeight: 600,
+            borderRadius: rounded.md,
+            fontSize: typography.sizes['body-md'].fontSize,
+            fontWeight: 500,
             cursor: 'pointer',
             boxShadow: shadows.sm,
             display: 'inline-flex',
             alignItems: 'center',
-            gap: spacing[2],
+            gap: spacing.xs,
           }}
+          aria-label="Add Lead"
         >
-          + Add Lead
+
+          Add Lead
         </button>
       </div>
 
-      {/* Success Alert */}
+      {/* Notification Alerts */}
+      {error && <ErrorAlert message={error} onClose={() => setError(null)} />}
       {successMessage && (
-        <Alert
-          variant="success"
-          message={successMessage}
-          onClose={() => setSuccessMessage(null)}
-          data-testid="leads-success-alert"
-        />
+        <SuccessAlert message={successMessage} onClose={() => setSuccessMessage(null)} />
       )}
 
-      {/* Page Error Alert */}
-      {pageError && (
-        <Alert
-          variant="error"
-          message={pageError}
-          onClose={() => setPageError(null)}
-          data-testid="leads-error-alert"
-        />
-      )}
-
-      {/* Data Table */}
+      {/* Leads DataTable */}
       <DataTable
-        data={leads}
         columns={columns}
-        keyExtractor={(item) => item.id}
+        data={leads}
         totalItems={totalItems}
-        page={page}
-        pageSize={pageSize}
-        onPageChange={(newPage) => setPage(newPage)}
-        sortBy={sortBy}
-        sortOrder={sortOrder}
-        onSortChange={(field, order) => {
-          setSortBy(field);
-          setSortOrder(order);
-        }}
-        searchQuery={searchQuery}
-        onSearchChange={(query) => {
-          setSearchQuery(query);
+        loading={loading}
+        searchValue={searchValue}
+        searchPlaceholder="Search leads..."
+        onSearchChange={(val) => {
+          setSearchValue(val);
           setPage(1);
         }}
-        searchPlaceholder="Search leads by title or company..."
-        isLoading={isLoading}
-        emptyTitle="No leads found"
-        emptyDescription="Get started by creating your first lead record."
-        onAdd={() => {
-          setIsAddModalOpen(true);
-          setFormServerError(null);
-          setFormFieldErrors({});
+        filters={statusFilterControl}
+        sortColumn={sortColumn}
+        sortDirection={sortDirection}
+        onSortChange={(col, dir) => {
+          setSortColumn(col);
+          setSortDirection(dir);
         }}
-        addLabel="Add Lead"
-        extraToolbar={extraToolbar}
-        onRowClick={(item) => handleViewLead(item)}
-        data-testid="leads-table"
+        page={page}
+        pageSize={pageSize}
+        onPageChange={(p) => setPage(p)}
+        onPageSizeChange={(ps) => {
+          setPageSize(ps);
+          setPage(1);
+        }}
+        emptyTitle={
+          searchValue || statusFilter ? 'No matching leads found' : 'No leads found'
+        }
+        emptyMessage={
+          searchValue || statusFilter
+            ? 'No leads match your search or filter criteria. Try clearing or adjusting your search or status filter.'
+            : 'Get started by creating your first lead to track deals in your pipeline.'
+        }
+        emptyActionLabel="Add Lead"
+        onEmptyAction={handleOpenAddModal}
+        getRowKey={(item) => item.id}
+        onRowClick={(item) => handleOpenDetailModal(item)}
+        ariaLabel="Leads Table"
       />
 
       {/* Add Lead Modal */}
-      <Modal
-        isOpen={isAddModalOpen}
-        onClose={() => setIsAddModalOpen(false)}
-        title="Add Lead"
-        data-testid="add-lead-modal"
-      >
-        <LeadForm
-          companies={companyOptions}
-          contacts={contactOptions}
-          onSubmit={handleCreateSubmit}
-          onCancel={() => setIsAddModalOpen(false)}
-          isLoading={isSubmitting}
-          submitLabel="Create Lead"
-          serverError={formServerError}
-          serverFieldErrors={formFieldErrors}
-        />
-      </Modal>
+      {isAddModalOpen && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="add-lead-modal-title"
+          style={{
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            backgroundColor: 'rgba(0, 0, 0, 0.5)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 1000,
+            padding: spacing.md,
+          }}
+          onClick={(e) => {
+            if (e.target === e.currentTarget) handleCloseAddModal();
+          }}
+        >
+          <div
+            style={{
+              maxWidth: '600px',
+              width: '100%',
+              maxHeight: '90vh',
+              overflowY: 'auto',
+              borderRadius: rounded.lg,
+            }}
+          >
+            <LeadForm
+              companies={companies}
+              contacts={contacts}
+              onSubmit={handleCreateLead}
+              onCancel={handleCloseAddModal}
+              isSubmitting={isSubmitting}
+              apiError={formApiError}
+              submitLabel="Create Lead"
+              title="Add New Lead"
+            />
+          </div>
+        </div>
+      )}
 
       {/* Edit Lead Modal */}
-      <Modal
-        isOpen={!!editingLead}
-        onClose={() => setEditingLead(null)}
-        title="Edit Lead"
-        data-testid="edit-lead-modal"
-      >
-        {editingLead && (
-          <LeadForm
-            initialValues={editingLead}
-            companies={companyOptions}
-            contacts={contactOptions}
-            onSubmit={handleUpdateSubmit}
-            onCancel={() => setEditingLead(null)}
-            isLoading={isSubmitting}
-            submitLabel="Save Changes"
-            serverError={formServerError}
-            serverFieldErrors={formFieldErrors}
-          />
-        )}
-      </Modal>
+      {isEditModalOpen && selectedLead && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="edit-lead-modal-title"
+          style={{
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            backgroundColor: 'rgba(0, 0, 0, 0.5)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 1000,
+            padding: spacing.md,
+          }}
+          onClick={(e) => {
+            if (e.target === e.currentTarget) handleCloseEditModal();
+          }}
+        >
+          <div
+            style={{
+              maxWidth: '600px',
+              width: '100%',
+              maxHeight: '90vh',
+              overflowY: 'auto',
+              borderRadius: rounded.lg,
+            }}
+          >
+            <LeadForm
+              initialValues={selectedLead}
+              companies={companies}
+              contacts={contacts}
+              onSubmit={handleUpdateLead}
+              onCancel={handleCloseEditModal}
+              isSubmitting={isSubmitting}
+              apiError={formApiError}
+              submitLabel="Save Changes"
+              title="Edit Lead"
+            />
+          </div>
+        </div>
+      )}
 
       {/* Lead Detail Modal */}
-      <Modal
-        isOpen={!!viewingLead}
-        onClose={() => setViewingLead(null)}
-        title="Lead Details"
-        data-testid="view-lead-modal"
-      >
-        {viewingLead && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: spacing[5] }}>
-            {/* Header info */}
+      {isDetailModalOpen && selectedLead && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="detail-lead-modal-title"
+          style={{
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            backgroundColor: 'rgba(0, 0, 0, 0.5)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 1000,
+            padding: spacing.md,
+          }}
+          onClick={(e) => {
+            if (e.target === e.currentTarget) handleCloseDetailModal();
+          }}
+        >
+          <div
+            style={{
+              maxWidth: '640px',
+              width: '100%',
+              backgroundColor: colors.surface.background,
+              borderRadius: rounded.lg,
+              padding: spacing.xl,
+              boxShadow: shadows.lg,
+              maxHeight: '90vh',
+              overflowY: 'auto',
+            }}
+          >
             <div
               style={{
                 display: 'flex',
-                alignItems: 'center',
                 justifyContent: 'space-between',
-                paddingBottom: spacing[4],
-                borderBottom: `1px solid ${colors.surface.outlineVariant}`,
+                alignItems: 'flex-start',
+                marginBottom: spacing.lg,
               }}
             >
               <div>
-                <h3
+                <h2
+                  id="detail-lead-modal-title"
                   style={{
-                    fontFamily: typography.styles.headlineSm.fontFamily,
-                    fontSize: typography.styles.headlineSm.fontSize,
-                    fontWeight: typography.styles.headlineSm.fontWeight,
-                    color: colors.surface.onSurface,
-                    margin: `0 0 ${spacing[1]} 0`,
-                  }}
-                >
-                  {viewingLead.title || viewingLead.name || 'Untitled Lead'}
-                </h3>
-                <p
-                  style={{
-                    fontFamily: typography.styles.caption.fontFamily,
-                    fontSize: typography.styles.caption.fontSize,
-                    color: colors.surface.onSurfaceVariant,
                     margin: 0,
-                  }}
-                >
-                  ID: #{viewingLead.id}
-                </p>
-              </div>
-              <StatusBadge status={viewingLead.status} size="lg" />
-            </div>
-
-            {/* Grid of detail fields */}
-            <div
-              style={{
-                display: 'grid',
-                gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
-                gap: spacing[4],
-              }}
-            >
-              <div>
-                <span style={{ ...typography.styles.labelCaps, color: colors.surface.onSurfaceVariant }}>
-                  Value
-                </span>
-                <p
-                  style={{
-                    margin: `${spacing[1]} 0 0 0`,
+                    fontFamily: typography.fontFamily.serif,
+                    fontSize: typography.sizes['headline-sm'].fontSize,
                     color: colors.surface.onSurface,
-                    fontWeight: 600,
-                    fontSize: typography.styles.headlineSm.fontSize,
                   }}
                 >
-                  ${(typeof viewingLead.value === 'number'
-                    ? viewingLead.value
-                    : Number(viewingLead.value || 0)
-                  ).toLocaleString('en-US', {
-                    minimumFractionDigits: 0,
-                    maximumFractionDigits: 2,
-                  })}
-                </p>
+                  {(leadDetail || selectedLead).title || (leadDetail || selectedLead).name || 'Lead Details'}
+                </h2>
+                <div style={{ marginTop: spacing.xs }}>
+                  <StatusBadge
+                    label={(leadDetail || selectedLead).status}
+                    status={(leadDetail || selectedLead).status}
+                  />
+                </div>
               </div>
-
-              <div>
-                <span style={{ ...typography.styles.labelCaps, color: colors.surface.onSurfaceVariant }}>
-                  Company
-                </span>
-                <p style={{ margin: `${spacing[1]} 0 0 0`, color: colors.surface.onSurface }}>
-                  {viewingLead.company_id && companyMap[viewingLead.company_id]
-                    ? companyMap[viewingLead.company_id]
-                    : 'Unassigned'}
-                </p>
-              </div>
-
-              <div>
-                <span style={{ ...typography.styles.labelCaps, color: colors.surface.onSurfaceVariant }}>
-                  Contact
-                </span>
-                <p style={{ margin: `${spacing[1]} 0 0 0`, color: colors.surface.onSurface }}>
-                  {viewingLead.contact_id && contactMap[viewingLead.contact_id]
-                    ? contactMap[viewingLead.contact_id]
-                    : 'Unassigned'}
-                </p>
-              </div>
-
-              <div>
-                <span style={{ ...typography.styles.labelCaps, color: colors.surface.onSurfaceVariant }}>
-                  Expected Close Date
-                </span>
-                <p style={{ margin: `${spacing[1]} 0 0 0`, color: colors.surface.onSurface }}>
-                  {formatDate(viewingLead.expected_close_date, { fallback: '—' })}
-                </p>
-              </div>
-
-              <div>
-                <span style={{ ...typography.styles.labelCaps, color: colors.surface.onSurfaceVariant }}>
-                  Owner
-                </span>
-                <p style={{ margin: `${spacing[1]} 0 0 0`, color: colors.surface.onSurface }}>
-                  {viewingLead.owner || '—'}
-                </p>
-              </div>
-
-              <div>
-                <span style={{ ...typography.styles.labelCaps, color: colors.surface.onSurfaceVariant }}>
-                  Created Date
-                </span>
-                <p style={{ margin: `${spacing[1]} 0 0 0`, color: colors.surface.onSurface }}>
-                  {formatDate(viewingLead.created_at, { fallback: '—' })}
-                </p>
-              </div>
-
-              <div>
-                <span style={{ ...typography.styles.labelCaps, color: colors.surface.onSurfaceVariant }}>
-                  Last Updated
-                </span>
-                <p style={{ margin: `${spacing[1]} 0 0 0`, color: colors.surface.onSurface }}>
-                  {formatDate(viewingLead.updated_at, { fallback: '—' })}
-                </p>
-              </div>
+              <button
+                onClick={handleCloseDetailModal}
+                aria-label="Close modal"
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  fontSize: '20px',
+                  cursor: 'pointer',
+                  color: colors.surface.onSurfaceVariant,
+                  padding: spacing.xs,
+                }}
+              >
+                ✕
+              </button>
             </div>
 
-            {/* Modal Actions */}
+            {isDetailLoading ? (
+              <LoadingState message="Loading lead details..." />
+            ) : (
+              <>
+                <div
+                  style={{
+                    display: 'grid',
+                    gridTemplateColumns: '1fr 1fr',
+                    gap: spacing.md,
+                    marginBottom: spacing.lg,
+                    fontSize: typography.sizes['body-md'].fontSize,
+                  }}
+                >
+                  <div>
+                    <span style={{ color: colors.surface.onSurfaceVariant, display: 'block', fontSize: '13px' }}>
+                      Lead Value
+                    </span>
+                    <strong style={{ fontSize: '18px', color: colors.accent.DEFAULT }}>
+                      {(leadDetail || selectedLead).value !== undefined
+                        ? formatCurrency((leadDetail || selectedLead).value)
+                        : '—'}
+                    </strong>
+                  </div>
+
+                  <div>
+                    <span style={{ color: colors.surface.onSurfaceVariant, display: 'block', fontSize: '13px' }}>
+                      Pipeline Status
+                    </span>
+                    <strong>{(leadDetail || selectedLead).status || '—'}</strong>
+                  </div>
+
+                  <div>
+                    <span style={{ color: colors.surface.onSurfaceVariant, display: 'block', fontSize: '13px' }}>
+                      Company
+                    </span>
+                    <strong>
+                      {(leadDetail || selectedLead).company_id
+                        ? companyMap[(leadDetail || selectedLead).company_id!] ||
+                          `Company #${(leadDetail || selectedLead).company_id}`
+                        : '—'}
+                    </strong>
+                  </div>
+
+                  <div>
+                    <span style={{ color: colors.surface.onSurfaceVariant, display: 'block', fontSize: '13px' }}>
+                      Contact
+                    </span>
+                    <strong>
+                      {(leadDetail || selectedLead).contact_id
+                        ? contactMap[(leadDetail || selectedLead).contact_id!] ||
+                          `Contact #${(leadDetail || selectedLead).contact_id}`
+                        : '—'}
+                    </strong>
+                  </div>
+
+                  <div>
+                    <span style={{ color: colors.surface.onSurfaceVariant, display: 'block', fontSize: '13px' }}>
+                      Expected Close Date
+                    </span>
+                    <strong>
+                      {formatDate((leadDetail || selectedLead).expected_close_date) || '—'}
+                    </strong>
+                  </div>
+
+                  <div>
+                    <span style={{ color: colors.surface.onSurfaceVariant, display: 'block', fontSize: '13px' }}>
+                      Owner
+                    </span>
+                    <strong>{(leadDetail || selectedLead).owner || '—'}</strong>
+                  </div>
+
+                  <div>
+                    <span style={{ color: colors.surface.onSurfaceVariant, display: 'block', fontSize: '13px' }}>
+                      Created Date
+                    </span>
+                    <strong>{formatDate((leadDetail || selectedLead).created_at) || '—'}</strong>
+                  </div>
+
+                  <div>
+                    <span style={{ color: colors.surface.onSurfaceVariant, display: 'block', fontSize: '13px' }}>
+                      Last Updated
+                    </span>
+                    <strong>{formatDate((leadDetail || selectedLead).updated_at) || '—'}</strong>
+                  </div>
+                </div>
+
+                {(leadDetail || selectedLead).notes && (
+                  <div style={{ marginBottom: spacing.lg }}>
+                    <span style={{ color: colors.surface.onSurfaceVariant, display: 'block', fontSize: '13px' }}>
+                      Notes
+                    </span>
+                    <p
+                      style={{
+                        margin: `${spacing.xs} 0 0 0`,
+                        whiteSpace: 'pre-wrap',
+                        fontSize: typography.sizes['body-md'].fontSize,
+                        color: colors.surface.onSurface,
+                      }}
+                    >
+                      {(leadDetail || selectedLead).notes}
+                    </p>
+                  </div>
+                )}
+              </>
+            )}
+
+            {/* Actions */}
             <div
               style={{
                 display: 'flex',
-                gap: spacing[3],
                 justifyContent: 'flex-end',
-                marginTop: spacing[2],
+                gap: spacing.md,
+                borderTop: `1px solid ${colors.borderVariant}`,
+                paddingTop: spacing.md,
               }}
             >
               <button
                 onClick={() => {
-                  setEditingLead(viewingLead);
-                  setViewingLead(null);
-                  setFormServerError(null);
-                  setFormFieldErrors({});
+                  const leadToEdit = selectedLead;
+                  handleCloseDetailModal();
+                  handleOpenEditModal(leadToEdit);
                 }}
-                data-testid="view-modal-edit-button"
                 style={{
-                  backgroundColor: colors.accent.primary,
-                  color: '#ffffff',
-                  border: 'none',
-                  borderRadius: radii.md,
-                  padding: `${spacing[2]} ${spacing[4]}`,
-                  fontWeight: 600,
+                  padding: `${spacing.sm} ${spacing.lg}`,
+                  backgroundColor: colors.surface.containerHigh,
+                  color: colors.surface.onSurface,
+                  border: `1px solid ${colors.borderVariant}`,
+                  borderRadius: rounded.md,
                   cursor: 'pointer',
+                  fontWeight: 500,
                 }}
               >
                 Edit Lead
               </button>
               <button
-                onClick={() => {
-                  setDeletingLead(viewingLead);
-                  setDeleteError(null);
-                }}
-                data-testid="view-modal-delete-button"
+                onClick={handleCloseDetailModal}
                 style={{
-                  backgroundColor: 'transparent',
-                  color: colors.secondary.main,
-                  border: `1px solid ${colors.secondary.main}`,
-                  borderRadius: radii.md,
-                  padding: `${spacing[2]} ${spacing[4]}`,
-                  fontWeight: 600,
+                  padding: `${spacing.sm} ${spacing.lg}`,
+                  backgroundColor: colors.accent.DEFAULT,
+                  color: colors.accent.onAccent,
+                  border: 'none',
+                  borderRadius: rounded.md,
                   cursor: 'pointer',
+                  fontWeight: 500,
                 }}
               >
-                Delete Lead
+                Close
               </button>
             </div>
           </div>
-        )}
-      </Modal>
+        </div>
+      )}
 
-      {/* Delete Confirmation Dialog */}
+      {/* Delete Lead Confirmation Dialog */}
       <ConfirmationDialog
-        isOpen={!!deletingLead}
+        isOpen={isDeleteModalOpen}
         title="Delete Lead"
-        message={
-          <div>
-            {deleteError && (
-              <div style={{ marginBottom: spacing[3] }}>
-                <Alert variant="error" message={deleteError} />
-              </div>
-            )}
-            <p style={{ margin: 0 }}>
-              Are you sure you want to delete lead{' '}
-              <strong>{deletingLead?.title || deletingLead?.name}</strong>?
-            </p>
-          </div>
-        }
+        message={`Are you sure you want to delete lead "${selectedLead?.title || selectedLead?.name || 'this lead'}"? This action cannot be undone.`}
         confirmLabel="Delete Lead"
         cancelLabel="Cancel"
-        onConfirm={handleConfirmDelete}
-        onCancel={() => {
-          setDeletingLead(null);
-          setDeleteError(null);
-        }}
         isDanger={true}
         isLoading={isDeleting}
+        onConfirm={handleDeleteLead}
+        onCancel={handleCloseDeleteModal}
       />
-    </div>
+    </section>
   );
 }

@@ -1,396 +1,271 @@
 'use client';
 
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import Link from 'next/link';
-import { colors, radii, shadows, spacing, typography } from '../../lib/tokens';
+import { colors, rounded, shadows, spacing, typography } from '@/lib/tokens';
+import { formatDate } from '@/lib/format';
+import { DataTable, Column } from '@/components/crm/DataTable';
+import { ContactForm, ContactFormData, CompanyOption } from '@/components/crm/ContactForm';
+import { ConfirmationDialog } from '@/components/shared/ConfirmationDialog';
+import { ErrorAlert, SuccessAlert } from '@/components/shared/Alerts';
+import { LoadingState } from '@/components/shared/States';
 import {
-  contactsApi,
-  companiesApi,
-  Contact,
-  ContactCreate,
-  ContactUpdate,
-  ContactQueryParams,
-  Company,
-} from '../../services/crm';
-import { DataTable, DataTableColumn } from '../../components/crm/DataTable';
-import { ContactForm, ContactFormData, CompanyOption } from '../../components/crm/ContactForm';
-import { ConfirmationDialog } from '../../components/shared/ConfirmationDialog';
-import { Alert } from '../../components/shared/Alerts';
-import { formatDate } from '../../lib/format';
+  getPaginatedContacts,
+  getContact,
+  createContact,
+  updateContact,
+  deleteContact,
+  listCompanies,
+  ContactRead,
+  CompanyRead,
+  CRMApiError,
+} from '@/services/crm';
 
-interface ModalProps {
-  isOpen: boolean;
-  onClose: () => void;
-  title: string;
-  children: React.ReactNode;
-  maxWidth?: string;
-  'data-testid'?: string;
-}
-
-const Modal: React.FC<ModalProps> = ({
-  isOpen,
-  onClose,
-  title,
-  children,
-  maxWidth = '640px',
-  'data-testid': testId = 'modal',
-}) => {
-  useEffect(() => {
-    if (!isOpen) return;
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        onClose();
-      }
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isOpen, onClose]);
-
-  useEffect(() => {
-    if (isOpen) {
-      const originalOverflow = document.body.style.overflow;
-      document.body.style.overflow = 'hidden';
-      return () => {
-        document.body.style.overflow = originalOverflow;
-      };
-    }
-  }, [isOpen]);
-
-  if (!isOpen) return null;
-
-  return (
-    <div
-      data-testid={testId}
-      onClick={(e) => {
-        if (e.target === e.currentTarget) onClose();
-      }}
-      style={{
-        position: 'fixed',
-        top: 0,
-        left: 0,
-        right: 0,
-        bottom: 0,
-        width: '100vw',
-        height: '100vh',
-        backgroundColor: 'rgba(27, 28, 25, 0.5)',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        zIndex: 1000,
-        padding: spacing[4],
-      }}
-    >
-      <div
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="modal-title"
-        style={{
-          backgroundColor: colors.surface.containerLowest,
-          borderRadius: radii.lg,
-          boxShadow: shadows.lifted,
-          border: `1px solid ${colors.surface.outlineVariant}`,
-          width: '100%',
-          maxWidth,
-          maxHeight: '90vh',
-          display: 'flex',
-          flexDirection: 'column',
-          overflow: 'hidden',
-        }}
-      >
-        <header
-          style={{
-            padding: `${spacing[4]} ${spacing[6]}`,
-            borderBottom: `1px solid ${colors.surface.outlineVariant}`,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-          }}
-        >
-          <h2
-            id="modal-title"
-            style={{
-              fontFamily: typography.styles.headlineSm.fontFamily,
-              fontSize: typography.styles.headlineSm.fontSize,
-              fontWeight: typography.styles.headlineSm.fontWeight,
-              color: colors.surface.onSurface,
-              margin: 0,
-            }}
-          >
-            {title}
-          </h2>
-          <button
-            onClick={onClose}
-            aria-label="Close modal"
-            style={{
-              background: 'none',
-              border: 'none',
-              fontSize: '18px',
-              fontWeight: 'bold',
-              color: colors.surface.onSurfaceVariant,
-              cursor: 'pointer',
-              padding: spacing[1],
-              lineHeight: 1,
-            }}
-          >
-            ✕
-          </button>
-        </header>
-        <div
-          style={{
-            padding: spacing[6],
-            overflowY: 'auto',
-            flex: 1,
-          }}
-        >
-          {children}
-        </div>
-      </div>
-    </div>
-  );
-};
-
+/**
+ * ContactsPage Component
+ * Route segment for `/contacts`
+ * Displays a DataTable of contacts with search, sort, and pagination.
+ * Offers Add Contact, Detail View, Edit Contact, and Delete Contact modals.
+ * Satisfies FR-2 (Contacts CRUD with company link), FR-10 (Breadcrumbs/Navigation), and FR-14 (Empty States).
+ */
 export default function ContactsPage() {
-  const [contacts, setContacts] = useState<Contact[]>([]);
-  const [companies, setCompanies] = useState<Company[]>([]);
-  const [totalItems, setTotalItems] = useState(0);
-  const [page, setPage] = useState(1);
-  const [pageSize] = useState(20);
-  const [sortBy, setSortBy] = useState('name');
-  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
-  const [searchQuery, setSearchQuery] = useState('');
-  const [isLoading, setIsLoading] = useState(true);
-  const [pageError, setPageError] = useState<string | null>(null);
+  // Data state
+  const [contacts, setContacts] = useState<ContactRead[]>([]);
+  const [totalItems, setTotalItems] = useState<number>(0);
+  const [page, setPage] = useState<number>(1);
+  const [pageSize, setPageSize] = useState<number>(20);
+  const [searchValue, setSearchValue] = useState<string>('');
+  const [sortColumn, setSortColumn] = useState<string>('name');
+  const [sortDirection, setSortDirection] = useState<'asc' | 'desc' | null>('asc');
+
+  // Company dropdown options and name lookup map
+  const [companies, setCompanies] = useState<CompanyOption[]>([]);
+
+  // Loading & error states
+  const [loading, setLoading] = useState<boolean>(true);
+  const [error, setError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
-  // Modal states
-  const [isAddModalOpen, setIsAddModalOpen] = useState(false);
-  const [editingContact, setEditingContact] = useState<Contact | null>(null);
-  const [viewingContact, setViewingContact] = useState<Contact | null>(null);
-  const [isDetailLoading, setIsDetailLoading] = useState(false);
+  // Modal & Selection states
+  const [isAddModalOpen, setIsAddModalOpen] = useState<boolean>(false);
+  const [isEditModalOpen, setIsEditModalOpen] = useState<boolean>(false);
+  const [isDetailModalOpen, setIsDetailModalOpen] = useState<boolean>(false);
+  const [isDeleteModalOpen, setIsDeleteModalOpen] = useState<boolean>(false);
 
-  // Deletion state
-  const [deletingContact, setDeletingContact] = useState<Contact | null>(null);
-  const [deleteError, setDeleteError] = useState<string | null>(null);
-  const [isDeleting, setIsDeleting] = useState(false);
+  const [selectedContact, setSelectedContact] = useState<ContactRead | null>(null);
+  const [contactDetail, setContactDetail] = useState<ContactRead | null>(null);
 
-  // Form submission state
-  const [isSubmitting, setIsSubmitting] = useState(false);
-  const [formServerError, setFormServerError] = useState<string | null>(null);
-  const [formFieldErrors, setFormFieldErrors] = useState<Record<string, string>>({});
+  const [isDetailLoading, setIsDetailLoading] = useState<boolean>(false);
+  const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
+  const [isDeleting, setIsDeleting] = useState<boolean>(false);
+  const [formApiError, setFormApiError] = useState<CRMApiError | string | null>(null);
 
-  const companyOptions: CompanyOption[] = useMemo(() => {
-    return companies.map((c) => ({ id: c.id, name: c.name }));
-  }, [companies]);
-
+  // Map of company ID to company name for fast lookup
   const companyMap = useMemo(() => {
     const map: Record<number, string> = {};
-    companies.forEach((c) => {
-      map[c.id] = c.name;
+    companies.forEach((comp) => {
+      map[comp.id] = comp.name;
     });
     return map;
   }, [companies]);
 
+  // Fetch company options for dropdown and display
   const fetchCompanies = useCallback(async () => {
     try {
-      const response = await companiesApi.list({ page: 1, page_size: 100 });
-      if (response.data) {
-        if ('items' in response.data && Array.isArray(response.data.items)) {
-          setCompanies(response.data.items);
-        } else if (Array.isArray(response.data)) {
-          setCompanies(response.data);
-        }
+      const companyList: CompanyRead[] = await listCompanies({ page_size: 1000 });
+      if (Array.isArray(companyList)) {
+        setCompanies(companyList.map((c) => ({ id: c.id, name: c.name })));
       }
-    } catch (err) {
-      // Ignore company fetch errors, contact form will present empty company dropdown
+    } catch {
+      // Non-critical background fetch failure for company list
     }
   }, []);
-
-  const fetchContacts = useCallback(async () => {
-    setIsLoading(true);
-    setPageError(null);
-    try {
-      const params: ContactQueryParams = {
-        page,
-        page_size: pageSize,
-        sort_by: sortBy,
-        order: sortOrder,
-      };
-      if (searchQuery.trim()) {
-        params.search = searchQuery.trim();
-      }
-
-      const response = await contactsApi.list(params);
-      if (response.error) {
-        setPageError(typeof response.error === 'string' ? response.error : 'Failed to load contacts');
-        setContacts([]);
-        setTotalItems(0);
-      } else if (response.data) {
-        if ('items' in response.data && Array.isArray(response.data.items)) {
-          setContacts(response.data.items);
-          setTotalItems(response.data.total ?? response.data.items.length);
-        } else if (Array.isArray(response.data)) {
-          setContacts(response.data);
-          setTotalItems(response.data.length);
-        }
-      }
-    } catch (err) {
-      setPageError(err instanceof Error ? err.message : 'An unexpected error occurred while loading contacts.');
-    } finally {
-      setIsLoading(false);
-    }
-  }, [page, pageSize, sortBy, sortOrder, searchQuery]);
 
   useEffect(() => {
     fetchCompanies();
   }, [fetchCompanies]);
 
+  // Fetch paginated contacts list
+  const fetchContacts = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const sortParam = sortColumn
+        ? sortDirection === 'desc'
+          ? `-${sortColumn}`
+          : sortColumn
+        : undefined;
+
+      const response = await getPaginatedContacts({
+        page,
+        page_size: pageSize,
+        search: searchValue || undefined,
+        sort: sortParam,
+      });
+
+      setContacts(response.items || []);
+      setTotalItems(response.total ?? (response.items ? response.items.length : 0));
+    } catch (err: unknown) {
+      if (err instanceof CRMApiError) {
+        setError(err.message);
+      } else if (err instanceof Error) {
+        setError(err.message);
+      } else {
+        setError('Failed to load contacts.');
+      }
+    } finally {
+      setLoading(false);
+    }
+  }, [page, pageSize, searchValue, sortColumn, sortDirection]);
+
   useEffect(() => {
     fetchContacts();
   }, [fetchContacts]);
 
-  const handleViewContact = async (contact: Contact) => {
+  // Modal control helpers
+  const handleOpenAddModal = () => {
+    setFormApiError(null);
+    setIsAddModalOpen(true);
+  };
+
+  const handleCloseAddModal = () => {
+    setIsAddModalOpen(false);
+    setFormApiError(null);
+  };
+
+  const handleOpenEditModal = (contact: ContactRead) => {
+    setSelectedContact(contact);
+    setFormApiError(null);
+    setIsEditModalOpen(true);
+  };
+
+  const handleCloseEditModal = () => {
+    setIsEditModalOpen(false);
+    setSelectedContact(null);
+    setFormApiError(null);
+  };
+
+  const handleOpenDetailModal = async (contact: ContactRead) => {
+    setSelectedContact(contact);
+    setContactDetail(contact);
+    setIsDetailModalOpen(true);
     setIsDetailLoading(true);
-    setViewingContact({ ...contact });
+
     try {
-      const res = await contactsApi.get(contact.id);
-      if (res.data) {
-        setViewingContact(res.data as Contact);
-      }
-    } catch (err) {
-      // Retain basic contact data if detail fetch fails
+      const detail = await getContact(contact.id);
+      setContactDetail(detail);
+    } catch {
+      // Fallback to initial selectedContact if detailed fetch fails
     } finally {
       setIsDetailLoading(false);
     }
   };
 
-  const handleCreateSubmit = async (formData: ContactFormData) => {
-    setIsSubmitting(true);
-    setFormServerError(null);
-    setFormFieldErrors({});
-    try {
-      const payload: ContactCreate = {
-        name: formData.name,
-        email: formData.email,
-        phone: formData.phone || null,
-        role: formData.role || null,
-        company_id: formData.company_id ?? null,
-        notes: formData.notes || null,
-        owner: formData.owner || '',
-      };
-      const res = await contactsApi.create(payload);
-      if (res.error) {
-        const errData = res.error as any;
-        if (errData?.fields && Array.isArray(errData.fields)) {
-          const fieldErrMap: Record<string, string> = {};
-          errData.fields.forEach((f: { field: string; message: string }) => {
-            fieldErrMap[f.field] = f.message;
-          });
-          setFormFieldErrors(fieldErrMap);
-        }
-        setFormServerError(errData?.message || 'Failed to create contact.');
-      } else if (res.data) {
-        setIsAddModalOpen(false);
-        setSuccessMessage(`Contact "${res.data.name}" created successfully.`);
-        fetchContacts();
-      }
-    } catch (err) {
-      setFormServerError(err instanceof Error ? err.message : 'Failed to create contact.');
-    } finally {
-      setIsSubmitting(false);
-    }
+  const handleCloseDetailModal = () => {
+    setIsDetailModalOpen(false);
+    setSelectedContact(null);
+    setContactDetail(null);
   };
 
-  const handleUpdateSubmit = async (formData: ContactFormData) => {
-    if (!editingContact) return;
-    setIsSubmitting(true);
-    setFormServerError(null);
-    setFormFieldErrors({});
-    try {
-      const payload: ContactUpdate = {
-        name: formData.name,
-        email: formData.email,
-        phone: formData.phone || null,
-        role: formData.role || null,
-        company_id: formData.company_id ?? null,
-        notes: formData.notes || null,
-        owner: formData.owner || null,
-      };
-      const res = await contactsApi.update(editingContact.id, payload);
-      if (res.error) {
-        const errData = res.error as any;
-        if (errData?.fields && Array.isArray(errData.fields)) {
-          const fieldErrMap: Record<string, string> = {};
-          errData.fields.forEach((f: { field: string; message: string }) => {
-            fieldErrMap[f.field] = f.message;
-          });
-          setFormFieldErrors(fieldErrMap);
-        }
-        setFormServerError(errData?.message || 'Failed to update contact.');
-      } else if (res.data) {
-        setEditingContact(null);
-        setSuccessMessage(`Contact "${res.data.name}" updated successfully.`);
-        fetchContacts();
-        if (viewingContact && viewingContact.id === res.data.id) {
-          setViewingContact(res.data as Contact);
-        }
-      }
-    } catch (err) {
-      setFormServerError(err instanceof Error ? err.message : 'Failed to update contact.');
-    } finally {
-      setIsSubmitting(false);
-    }
+  const handleOpenDeleteModal = (contact: ContactRead) => {
+    setSelectedContact(contact);
+    setIsDeleteModalOpen(true);
   };
 
-  const handleConfirmDelete = async () => {
-    if (!deletingContact) return;
-    setIsDeleting(true);
-    setDeleteError(null);
+  const handleCloseDeleteModal = () => {
+    setIsDeleteModalOpen(false);
+    setSelectedContact(null);
+  };
+
+  // Form submit handlers
+  const handleCreateContact = async (data: ContactFormData) => {
+    setIsSubmitting(true);
+    setFormApiError(null);
     try {
-      const res = await contactsApi.delete(deletingContact.id);
-      if (res.error) {
-        const errData = res.error as any;
-        setDeleteError(errData?.message || 'Failed to delete contact.');
+      await createContact(data);
+      setSuccessMessage(`Contact "${data.name.trim()}" created successfully.`);
+      handleCloseAddModal();
+      fetchContacts();
+    } catch (err: unknown) {
+      if (err instanceof CRMApiError) {
+        setFormApiError(err);
+      } else if (err instanceof Error) {
+        setFormApiError(err.message);
       } else {
-        const deletedName = deletingContact.name;
-        setDeletingContact(null);
-        setSuccessMessage(`Contact "${deletedName}" deleted successfully.`);
-        fetchContacts();
-        if (viewingContact && viewingContact.id === deletingContact.id) {
-          setViewingContact(null);
-        }
+        setFormApiError('Failed to create contact.');
       }
-    } catch (err) {
-      setDeleteError(err instanceof Error ? err.message : 'An error occurred during deletion.');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleUpdateContact = async (data: ContactFormData) => {
+    if (!selectedContact) return;
+    setIsSubmitting(true);
+    setFormApiError(null);
+    try {
+      await updateContact(selectedContact.id, data);
+      setSuccessMessage(`Contact "${data.name.trim()}" updated successfully.`);
+      handleCloseEditModal();
+      fetchContacts();
+    } catch (err: unknown) {
+      if (err instanceof CRMApiError) {
+        setFormApiError(err);
+      } else if (err instanceof Error) {
+        setFormApiError(err.message);
+      } else {
+        setFormApiError('Failed to update contact.');
+      }
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleDeleteContact = async () => {
+    if (!selectedContact) return;
+    setIsDeleting(true);
+    try {
+      await deleteContact(selectedContact.id);
+      setSuccessMessage(`Contact "${selectedContact.name}" deleted successfully.`);
+      handleCloseDeleteModal();
+      fetchContacts();
+    } catch (err: unknown) {
+      if (err instanceof CRMApiError) {
+        setError(`Failed to delete contact: ${err.message}`);
+      } else if (err instanceof Error) {
+        setError(`Failed to delete contact: ${err.message}`);
+      } else {
+        setError('Failed to delete contact.');
+      }
+      handleCloseDeleteModal();
     } finally {
       setIsDeleting(false);
     }
   };
 
-  const columns: DataTableColumn<Contact>[] = [
+  // Table columns definition
+  const columns: Column<ContactRead>[] = [
     {
       key: 'name',
-      header: 'Contact Name',
+      header: 'Name',
       sortable: true,
       sortField: 'name',
-      accessor: (contact) => (
+      render: (contact) => (
         <button
-          onClick={(e) => {
-            e.stopPropagation();
-            handleViewContact(contact);
-          }}
+          onClick={() => handleOpenDetailModal(contact)}
           style={{
             background: 'none',
             border: 'none',
             padding: 0,
-            color: colors.accent.primary,
-            fontWeight: 600,
+            margin: 0,
+            color: colors.accent.DEFAULT,
+            fontWeight: 500,
+            textDecoration: 'none',
             cursor: 'pointer',
             textAlign: 'left',
             fontFamily: 'inherit',
             fontSize: 'inherit',
-            textDecoration: 'underline',
           }}
-          data-testid={`contact-name-link-${contact.id}`}
+          aria-label={`View details for ${contact.name}`}
         >
           {contact.name}
         </button>
@@ -401,96 +276,102 @@ export default function ContactsPage() {
       header: 'Email',
       sortable: true,
       sortField: 'email',
-      accessor: (contact) => contact.email || '—',
+      render: (contact) => (
+        <a
+          href={`mailto:${contact.email}`}
+          style={{ color: colors.accent.DEFAULT, textDecoration: 'none' }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          {contact.email}
+        </a>
+      ),
     },
     {
       key: 'phone',
       header: 'Phone',
-      accessor: (contact) => contact.phone || '—',
+      render: (contact) => contact.phone || '—',
+    },
+    {
+      key: 'company_id',
+      header: 'Company',
+      render: (contact) => {
+        if (!contact.company_id) return '—';
+        const companyName = companyMap[contact.company_id];
+        return companyName || `Company #${contact.company_id}`;
+      },
     },
     {
       key: 'role',
       header: 'Role',
-      accessor: (contact) => contact.role || '—',
+      sortable: true,
+      sortField: 'role',
+      render: (contact) => contact.role || '—',
     },
     {
-      key: 'company',
-      header: 'Company',
-      accessor: (contact) => {
-        if (contact.company_id && companyMap[contact.company_id]) {
-          return companyMap[contact.company_id];
-        }
-        return 'Unassigned';
-      },
+      key: 'owner',
+      header: 'Owner',
+      sortable: true,
+      sortField: 'owner',
+      render: (contact) => contact.owner || '—',
     },
     {
       key: 'created_at',
-      header: 'Created',
+      header: 'Created Date',
       sortable: true,
       sortField: 'created_at',
-      accessor: (contact) => formatDate(contact.created_at, { fallback: '—' }),
+      render: (contact) => formatDate(contact.created_at) || '—',
     },
     {
       key: 'actions',
       header: 'Actions',
       align: 'right',
-      accessor: (contact) => (
+      render: (contact) => (
         <div
-          style={{ display: 'flex', gap: spacing[2], justifyContent: 'flex-end' }}
+          style={{ display: 'flex', gap: spacing.xs, justifyContent: 'flex-end' }}
           onClick={(e) => e.stopPropagation()}
         >
           <button
-            onClick={() => handleViewContact(contact)}
-            data-testid={`view-contact-${contact.id}`}
+            onClick={() => handleOpenDetailModal(contact)}
             style={{
-              backgroundColor: 'transparent',
-              color: colors.surface.onSurface,
-              border: `1px solid ${colors.surface.outlineVariant}`,
-              borderRadius: radii.sm,
-              padding: `${spacing[1]} ${spacing[3]}`,
-              fontSize: typography.styles.caption.fontSize,
-              fontWeight: 500,
+              padding: `${spacing.xs} ${spacing.sm}`,
+              backgroundColor: colors.surface.surfaceContainerHigh,
+              border: `1px solid ${colors.borderVariant}`,
+              borderRadius: rounded.sm,
+              fontSize: '13px',
               cursor: 'pointer',
+              color: colors.surface.onSurface,
             }}
+            aria-label={`View ${contact.name}`}
           >
             View
           </button>
           <button
-            onClick={() => {
-              setEditingContact(contact);
-              setFormServerError(null);
-              setFormFieldErrors({});
-            }}
-            data-testid={`edit-contact-${contact.id}`}
+            onClick={() => handleOpenEditModal(contact)}
             style={{
-              backgroundColor: 'transparent',
-              color: colors.accent.primary,
-              border: `1px solid ${colors.surface.outlineVariant}`,
-              borderRadius: radii.sm,
-              padding: `${spacing[1]} ${spacing[3]}`,
-              fontSize: typography.styles.caption.fontSize,
-              fontWeight: 500,
+              padding: `${spacing.xs} ${spacing.sm}`,
+              backgroundColor: colors.surface.surfaceContainerHigh,
+              border: `1px solid ${colors.borderVariant}`,
+              borderRadius: rounded.sm,
+              fontSize: '13px',
               cursor: 'pointer',
+              color: colors.surface.onSurface,
             }}
+            aria-label={`Edit ${contact.name}`}
           >
             Edit
           </button>
           <button
-            onClick={() => {
-              setDeletingContact(contact);
-              setDeleteError(null);
-            }}
-            data-testid={`delete-contact-${contact.id}`}
+            onClick={() => handleOpenDeleteModal(contact)}
             style={{
-              backgroundColor: 'transparent',
-              color: colors.secondary.main,
-              border: `1px solid ${colors.surface.outlineVariant}`,
-              borderRadius: radii.sm,
-              padding: `${spacing[1]} ${spacing[3]}`,
-              fontSize: typography.styles.caption.fontSize,
-              fontWeight: 500,
+              padding: `${spacing.xs} ${spacing.sm}`,
+              backgroundColor: colors.status.errorContainer,
+              color: colors.status.onErrorContainer,
+              border: 'none',
+              borderRadius: rounded.sm,
+              fontSize: '13px',
               cursor: 'pointer',
             }}
+            aria-label={`Delete ${contact.name}`}
           >
             Delete
           </button>
@@ -500,374 +381,454 @@ export default function ContactsPage() {
   ];
 
   return (
-    <div
-      data-testid="contacts-page"
-      style={{
-        display: 'flex',
-        flexDirection: 'column',
-        gap: spacing[6],
-      }}
+    <section
+      aria-label="Contacts Management"
+      style={{ display: 'flex', flexDirection: 'column', gap: spacing.lg }}
     >
-      {/* Breadcrumb Navigation (FR-10) */}
-      <nav aria-label="Breadcrumb" style={{ marginBottom: `-${spacing[3]}` }}>
+      {/* Breadcrumbs Navigation (FR-10) */}
+      <nav aria-label="Breadcrumb" style={{ marginBottom: `-${spacing.sm}` }}>
         <ol
           style={{
             display: 'flex',
             alignItems: 'center',
-            gap: spacing[2],
+            gap: spacing.xs,
             listStyle: 'none',
-            padding: 0,
             margin: 0,
-            fontFamily: typography.styles.caption.fontFamily,
-            fontSize: typography.styles.caption.fontSize,
+            padding: 0,
+            fontSize: typography.sizes.caption.fontSize,
             color: colors.surface.onSurfaceVariant,
           }}
         >
           <li>
-            <Link href="/" style={{ color: colors.accent.primary, textDecoration: 'none' }}>
-              Home
-            </Link>
+            <a
+              href="/"
+              style={{ color: colors.accent.DEFAULT, textDecoration: 'none' }}
+            >
+              Dashboard
+            </a>
           </li>
           <li>/</li>
-          <li aria-current="page" style={{ fontWeight: 600, color: colors.surface.onSurface }}>
+          <li aria-current="page" style={{ color: colors.surface.onSurface, fontWeight: 500 }}>
             Contacts
           </li>
         </ol>
       </nav>
 
-      {/* Page Header */}
-      <div
+      {/* Header Banner */}
+      <header
         style={{
           display: 'flex',
-          flexWrap: 'wrap',
-          alignItems: 'center',
           justifyContent: 'space-between',
-          gap: spacing[4],
-          borderBottom: `1px solid ${colors.surface.outlineVariant}`,
-          paddingBottom: spacing[4],
+          alignItems: 'flex-start',
+          gap: spacing.md,
+          flexWrap: 'wrap',
         }}
       >
         <div>
           <h1
             style={{
-              fontFamily: typography.styles.displayLg.fontFamily,
-              fontSize: typography.styles.headlineMd.fontSize,
-              fontWeight: typography.styles.headlineMd.fontWeight,
+              fontFamily: typography.fontFamily.serif,
+              fontSize: typography.sizes['headline-md'].fontSize,
+              fontWeight: typography.sizes['headline-md'].fontWeight,
+              lineHeight: typography.sizes['headline-md'].lineHeight,
               color: colors.surface.onSurface,
-              margin: `0 0 ${spacing[1]} 0`,
+              margin: 0,
             }}
           >
             Contacts
           </h1>
           <p
             style={{
-              fontFamily: typography.styles.bodyMd.fontFamily,
-              fontSize: typography.styles.bodyMd.fontSize,
+              fontFamily: typography.fontFamily.sans,
+              fontSize: typography.sizes['body-md'].fontSize,
               color: colors.surface.onSurfaceVariant,
-              margin: 0,
+              margin: `${spacing.xs} 0 0 0`,
             }}
           >
-            Manage contacts and link them to company records.
+            Manage individual contacts, roles, communication details, and company associations.
           </p>
         </div>
 
         <button
-          onClick={() => {
-            setIsAddModalOpen(true);
-            setFormServerError(null);
-            setFormFieldErrors({});
-          }}
-          data-testid="add-contact-button"
+          onClick={handleOpenAddModal}
           style={{
-            backgroundColor: colors.accent.primary,
-            color: '#ffffff',
+            padding: `${spacing.sm} ${spacing.lg}`,
+            backgroundColor: colors.accent.DEFAULT,
+            color: colors.accent.onAccent,
             border: 'none',
-            borderRadius: radii.md,
-            padding: `${spacing[2]} ${spacing[4]}`,
-            fontFamily: typography.styles.labelCaps.fontFamily,
-            fontSize: typography.styles.bodyMd.fontSize,
-            fontWeight: 600,
+            borderRadius: rounded.md,
+            fontWeight: 500,
+            fontSize: typography.sizes['body-md'].fontSize,
             cursor: 'pointer',
             boxShadow: shadows.sm,
             display: 'inline-flex',
             alignItems: 'center',
-            gap: spacing[2],
+            gap: spacing.xs,
           }}
+          aria-label="Add new contact"
         >
-          + Add Contact
+          <span>+</span> Add Contact
         </button>
-      </div>
+      </header>
 
-      {/* Success Banner */}
+      {/* Notification Alerts */}
       {successMessage && (
-        <Alert
-          variant="success"
-          title="Success"
+        <SuccessAlert
           message={successMessage}
-          onClose={() => setSuccessMessage(null)}
-          data-testid="contacts-success-alert"
+          onDismiss={() => setSuccessMessage(null)}
+        />
+      )}
+      {error && (
+        <ErrorAlert
+          message={error}
+          onDismiss={() => setError(null)}
         />
       )}
 
-      {/* Global Page Error Banner */}
-      {pageError && (
-        <Alert
-          variant="error"
-          title="Error Loading Contacts"
-          message={pageError}
-          onClose={() => setPageError(null)}
-          data-testid="contacts-error-alert"
-        />
-      )}
-
-      {/* Data Table Component */}
-      <DataTable
-        data={contacts}
+      {/* Main Contacts DataTable (FR-2, FR-14) */}
+      <DataTable<ContactRead>
         columns={columns}
-        keyExtractor={(item) => item.id}
+        data={contacts}
         totalItems={totalItems}
+        loading={loading}
+        error={error}
+        searchValue={searchValue}
+        searchPlaceholder="Search contacts by name, email, or role..."
+        onSearchChange={(value) => {
+          setSearchValue(value);
+          setPage(1);
+        }}
+        sortColumn={sortColumn}
+        sortDirection={sortDirection}
+        onSortChange={(col, dir) => {
+          setSortColumn(col);
+          setSortDirection(dir);
+        }}
         page={page}
         pageSize={pageSize}
-        onPageChange={setPage}
-        sortBy={sortBy}
-        sortOrder={sortOrder}
-        onSortChange={(field, order) => {
-          setSortBy(field);
-          setSortOrder(order);
+        onPageChange={(p) => setPage(p)}
+        onPageSizeChange={(ps) => {
+          setPageSize(ps);
+          setPage(1);
         }}
-        searchQuery={searchQuery}
-        onSearchChange={setSearchQuery}
-        searchPlaceholder="Search contacts by name or email..."
-        isLoading={isLoading}
         emptyTitle="No contacts found"
-        emptyDescription="Get started by adding your first contact record."
-        onAdd={() => {
-          setIsAddModalOpen(true);
-          setFormServerError(null);
-          setFormFieldErrors({});
-        }}
-        addLabel="Add Contact"
-        onRowClick={(contact) => handleViewContact(contact)}
-        data-testid="contacts-data-table"
+        emptyMessage="Get started by adding your first contact to build your network."
+        emptyActionLabel="Add Contact"
+        onEmptyAction={handleOpenAddModal}
+        getRowKey={(item) => item.id}
+        onRowClick={(item) => handleOpenDetailModal(item)}
+        ariaLabel="Contacts Table"
       />
 
       {/* Add Contact Modal */}
-      <Modal
-        isOpen={isAddModalOpen}
-        onClose={() => setIsAddModalOpen(false)}
-        title="Add New Contact"
-        data-testid="add-contact-modal"
-      >
-        <ContactForm
-          companies={companyOptions}
-          onSubmit={handleCreateSubmit}
-          onCancel={() => setIsAddModalOpen(false)}
-          isLoading={isSubmitting}
-          submitLabel="Create Contact"
-          serverError={formServerError}
-          serverFieldErrors={formFieldErrors}
-        />
-      </Modal>
+      {isAddModalOpen && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="add-contact-modal-title"
+          style={{
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            backgroundColor: 'rgba(0, 0, 0, 0.5)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 1000,
+            padding: spacing.md,
+          }}
+          onClick={(e) => {
+            if (e.target === e.currentTarget) handleCloseAddModal();
+          }}
+        >
+          <div
+            style={{
+              maxWidth: '600px',
+              width: '100%',
+              maxHeight: '90vh',
+              overflowY: 'auto',
+              borderRadius: rounded.lg,
+            }}
+          >
+            <ContactForm
+              companies={companies}
+              onSubmit={handleCreateContact}
+              onCancel={handleCloseAddModal}
+              isSubmitting={isSubmitting}
+              apiError={formApiError}
+              submitLabel="Create Contact"
+              title="Add New Contact"
+            />
+          </div>
+        </div>
+      )}
 
       {/* Edit Contact Modal */}
-      <Modal
-        isOpen={!!editingContact}
-        onClose={() => setEditingContact(null)}
-        title={`Edit ${editingContact?.name || 'Contact'}`}
-        data-testid="edit-contact-modal"
-      >
-        {editingContact && (
-          <ContactForm
-            initialValues={editingContact}
-            companies={companyOptions}
-            onSubmit={handleUpdateSubmit}
-            onCancel={() => setEditingContact(null)}
-            isLoading={isSubmitting}
-            submitLabel="Save Changes"
-            serverError={formServerError}
-            serverFieldErrors={formFieldErrors}
-          />
-        )}
-      </Modal>
+      {isEditModalOpen && selectedContact && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="edit-contact-modal-title"
+          style={{
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            backgroundColor: 'rgba(0, 0, 0, 0.5)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 1000,
+            padding: spacing.md,
+          }}
+          onClick={(e) => {
+            if (e.target === e.currentTarget) handleCloseEditModal();
+          }}
+        >
+          <div
+            style={{
+              maxWidth: '600px',
+              width: '100%',
+              maxHeight: '90vh',
+              overflowY: 'auto',
+              borderRadius: rounded.lg,
+            }}
+          >
+            <ContactForm
+              initialValues={selectedContact}
+              companies={companies}
+              onSubmit={handleUpdateContact}
+              onCancel={handleCloseEditModal}
+              isSubmitting={isSubmitting}
+              apiError={formApiError}
+              submitLabel="Save Changes"
+              title="Edit Contact"
+            />
+          </div>
+        </div>
+      )}
 
-      {/* View Contact Detail Modal */}
-      <Modal
-        isOpen={!!viewingContact}
-        onClose={() => setViewingContact(null)}
-        title={viewingContact?.name || 'Contact Details'}
-        data-testid="view-contact-modal"
-      >
-        {viewingContact && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: spacing[4] }}>
-            {isDetailLoading && (
-              <p style={{ color: colors.surface.onSurfaceVariant, fontSize: typography.styles.caption.fontSize }}>
-                Refreshing details...
-              </p>
-            )}
-
+      {/* Contact Detail Modal */}
+      {isDetailModalOpen && selectedContact && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="detail-contact-modal-title"
+          style={{
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            backgroundColor: 'rgba(0, 0, 0, 0.5)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 1000,
+            padding: spacing.md,
+          }}
+          onClick={(e) => {
+            if (e.target === e.currentTarget) handleCloseDetailModal();
+          }}
+        >
+          <div
+            style={{
+              maxWidth: '640px',
+              width: '100%',
+              backgroundColor: colors.surface.background,
+              borderRadius: rounded.lg,
+              padding: spacing.xl,
+              boxShadow: shadows.lg,
+              maxHeight: '90vh',
+              overflowY: 'auto',
+            }}
+          >
             <div
               style={{
-                display: 'grid',
-                gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
-                gap: spacing[4],
-                backgroundColor: colors.surface.containerLow,
-                padding: spacing[4],
-                borderRadius: radii.md,
-                border: `1px solid ${colors.surface.outlineVariant}`,
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'flex-start',
+                marginBottom: spacing.lg,
               }}
             >
-              <div>
-                <span style={{ ...typography.styles.labelCaps, color: colors.surface.onSurfaceVariant }}>Full Name</span>
-                <p style={{ margin: `${spacing[1]} 0 0 0`, fontWeight: 600, color: colors.surface.onSurface }}>
-                  {viewingContact.name}
-                </p>
-              </div>
-
-              <div>
-                <span style={{ ...typography.styles.labelCaps, color: colors.surface.onSurfaceVariant }}>Email</span>
-                <p style={{ margin: `${spacing[1]} 0 0 0`, color: colors.surface.onSurface }}>
-                  <a
-                    href={`mailto:${viewingContact.email}`}
-                    style={{ color: colors.accent.primary, textDecoration: 'none' }}
-                  >
-                    {viewingContact.email}
-                  </a>
-                </p>
-              </div>
-
-              <div>
-                <span style={{ ...typography.styles.labelCaps, color: colors.surface.onSurfaceVariant }}>Phone</span>
-                <p style={{ margin: `${spacing[1]} 0 0 0`, color: colors.surface.onSurface }}>
-                  {viewingContact.phone || '—'}
-                </p>
-              </div>
-
-              <div>
-                <span style={{ ...typography.styles.labelCaps, color: colors.surface.onSurfaceVariant }}>Role / Job Title</span>
-                <p style={{ margin: `${spacing[1]} 0 0 0`, color: colors.surface.onSurface }}>
-                  {viewingContact.role || '—'}
-                </p>
-              </div>
-
-              <div>
-                <span style={{ ...typography.styles.labelCaps, color: colors.surface.onSurfaceVariant }}>Company</span>
-                <p style={{ margin: `${spacing[1]} 0 0 0`, color: colors.surface.onSurface }}>
-                  {viewingContact.company_id && companyMap[viewingContact.company_id]
-                    ? companyMap[viewingContact.company_id]
-                    : 'Unassigned'}
-                </p>
-              </div>
-
-              <div>
-                <span style={{ ...typography.styles.labelCaps, color: colors.surface.onSurfaceVariant }}>Owner</span>
-                <p style={{ margin: `${spacing[1]} 0 0 0`, color: colors.surface.onSurface }}>
-                  {viewingContact.owner || '—'}
-                </p>
-              </div>
-
-              <div>
-                <span style={{ ...typography.styles.labelCaps, color: colors.surface.onSurfaceVariant }}>Created Date</span>
-                <p style={{ margin: `${spacing[1]} 0 0 0`, color: colors.surface.onSurface }}>
-                  {formatDate(viewingContact.created_at, { fallback: '—' })}
-                </p>
-              </div>
-
-              <div>
-                <span style={{ ...typography.styles.labelCaps, color: colors.surface.onSurfaceVariant }}>Last Updated</span>
-                <p style={{ margin: `${spacing[1]} 0 0 0`, color: colors.surface.onSurface }}>
-                  {formatDate(viewingContact.updated_at, { fallback: '—' })}
-                </p>
-              </div>
-            </div>
-
-            {/* Notes Section */}
-            {viewingContact.notes && (
-              <div
+              <h2
+                id="detail-contact-modal-title"
                 style={{
-                  backgroundColor: colors.surface.containerLow,
-                  padding: spacing[4],
-                  borderRadius: radii.md,
-                  border: `1px solid ${colors.surface.outlineVariant}`,
+                  margin: 0,
+                  fontFamily: typography.fontFamily.serif,
+                  fontSize: typography.sizes['headline-sm'].fontSize,
+                  color: colors.surface.onSurface,
                 }}
               >
-                <span style={{ ...typography.styles.labelCaps, color: colors.surface.onSurfaceVariant }}>Notes</span>
-                <p style={{ margin: `${spacing[1]} 0 0 0`, color: colors.surface.onSurface, whiteSpace: 'pre-wrap' }}>
-                  {viewingContact.notes}
-                </p>
-              </div>
+                {(contactDetail || selectedContact).name}
+              </h2>
+              <button
+                onClick={handleCloseDetailModal}
+                aria-label="Close modal"
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  fontSize: '20px',
+                  cursor: 'pointer',
+                  color: colors.surface.onSurfaceVariant,
+                  padding: spacing.xs,
+                }}
+              >
+                ✕
+              </button>
+            </div>
+
+            {isDetailLoading ? (
+              <LoadingState message="Loading contact details..." />
+            ) : (
+              <>
+                <div
+                  style={{
+                    display: 'grid',
+                    gridTemplateColumns: '1fr 1fr',
+                    gap: spacing.md,
+                    marginBottom: spacing.lg,
+                    fontSize: typography.sizes['body-md'].fontSize,
+                  }}
+                >
+                  <div>
+                    <span style={{ color: colors.surface.onSurfaceVariant, display: 'block', fontSize: '13px' }}>
+                      Email Address
+                    </span>
+                    <a
+                      href={`mailto:${(contactDetail || selectedContact).email}`}
+                      style={{ color: colors.accent.DEFAULT, textDecoration: 'none', fontWeight: 500 }}
+                    >
+                      {(contactDetail || selectedContact).email}
+                    </a>
+                  </div>
+
+                  <div>
+                    <span style={{ color: colors.surface.onSurfaceVariant, display: 'block', fontSize: '13px' }}>
+                      Phone
+                    </span>
+                    <strong>{(contactDetail || selectedContact).phone || '—'}</strong>
+                  </div>
+
+                  <div>
+                    <span style={{ color: colors.surface.onSurfaceVariant, display: 'block', fontSize: '13px' }}>
+                      Role / Position
+                    </span>
+                    <strong>{(contactDetail || selectedContact).role || '—'}</strong>
+                  </div>
+
+                  <div>
+                    <span style={{ color: colors.surface.onSurfaceVariant, display: 'block', fontSize: '13px' }}>
+                      Company
+                    </span>
+                    <strong>
+                      {(contactDetail || selectedContact).company_id
+                        ? companyMap[(contactDetail || selectedContact).company_id!] ||
+                          `Company #${(contactDetail || selectedContact).company_id}`
+                        : '—'}
+                    </strong>
+                  </div>
+
+                  <div>
+                    <span style={{ color: colors.surface.onSurfaceVariant, display: 'block', fontSize: '13px' }}>
+                      Owner
+                    </span>
+                    <strong>{(contactDetail || selectedContact).owner || '—'}</strong>
+                  </div>
+
+                  <div>
+                    <span style={{ color: colors.surface.onSurfaceVariant, display: 'block', fontSize: '13px' }}>
+                      Created At
+                    </span>
+                    <strong>{formatDate((contactDetail || selectedContact).created_at) || '—'}</strong>
+                  </div>
+                </div>
+
+                {(contactDetail || selectedContact).notes && (
+                  <div style={{ marginBottom: spacing.lg }}>
+                    <span style={{ color: colors.surface.onSurfaceVariant, display: 'block', fontSize: '13px' }}>
+                      Notes
+                    </span>
+                    <p
+                      style={{
+                        margin: `${spacing.xs} 0 0 0`,
+                        whiteSpace: 'pre-wrap',
+                        fontSize: typography.sizes['body-md'].fontSize,
+                        color: colors.surface.onSurface,
+                      }}
+                    >
+                      {(contactDetail || selectedContact).notes}
+                    </p>
+                  </div>
+                )}
+              </>
             )}
 
-            {/* Modal Actions */}
-            <div style={{ display: 'flex', gap: spacing[3], justifyContent: 'flex-end', marginTop: spacing[2] }}>
+            {/* Actions */}
+            <div
+              style={{
+                display: 'flex',
+                justifyContent: 'flex-end',
+                gap: spacing.md,
+                borderTop: `1px solid ${colors.borderVariant}`,
+                paddingTop: spacing.md,
+              }}
+            >
               <button
                 onClick={() => {
-                  setEditingContact(viewingContact);
-                  setViewingContact(null);
-                  setFormServerError(null);
-                  setFormFieldErrors({});
+                  const contactToEdit = selectedContact;
+                  handleCloseDetailModal();
+                  handleOpenEditModal(contactToEdit);
                 }}
-                data-testid="view-modal-edit-button"
                 style={{
-                  backgroundColor: colors.accent.primary,
-                  color: '#ffffff',
-                  border: 'none',
-                  borderRadius: radii.md,
-                  padding: `${spacing[2]} ${spacing[4]}`,
-                  fontWeight: 600,
+                  padding: `${spacing.sm} ${spacing.lg}`,
+                  backgroundColor: colors.surface.surfaceContainerHigh,
+                  color: colors.surface.onSurface,
+                  border: `1px solid ${colors.borderVariant}`,
+                  borderRadius: rounded.md,
                   cursor: 'pointer',
+                  fontWeight: 500,
                 }}
               >
                 Edit Contact
               </button>
               <button
-                onClick={() => {
-                  setDeletingContact(viewingContact);
-                  setDeleteError(null);
-                }}
-                data-testid="view-modal-delete-button"
+                onClick={handleCloseDetailModal}
                 style={{
-                  backgroundColor: 'transparent',
-                  color: colors.secondary.main,
-                  border: `1px solid ${colors.secondary.main}`,
-                  borderRadius: radii.md,
-                  padding: `${spacing[2]} ${spacing[4]}`,
-                  fontWeight: 600,
+                  padding: `${spacing.sm} ${spacing.lg}`,
+                  backgroundColor: colors.accent.DEFAULT,
+                  color: colors.accent.onAccent,
+                  border: 'none',
+                  borderRadius: rounded.md,
                   cursor: 'pointer',
+                  fontWeight: 500,
                 }}
               >
-                Delete Contact
+                Close
               </button>
             </div>
           </div>
-        )}
-      </Modal>
+        </div>
+      )}
 
       {/* Delete Confirmation Dialog */}
       <ConfirmationDialog
-        isOpen={!!deletingContact}
+        isOpen={isDeleteModalOpen}
         title="Delete Contact"
         message={
-          <div>
-            {deleteError && (
-              <div style={{ marginBottom: spacing[3] }}>
-                <Alert variant="error" message={deleteError} />
-              </div>
-            )}
-            <p style={{ margin: 0 }}>
-              Are you sure you want to delete contact <strong>{deletingContact?.name}</strong>?
-            </p>
-          </div>
+          selectedContact
+            ? `Are you sure you want to delete "${selectedContact.name}"? This action cannot be undone.`
+            : 'Are you sure you want to delete this contact?'
         }
-        confirmLabel="Delete Contact"
-        cancelLabel="Cancel"
-        onConfirm={handleConfirmDelete}
-        onCancel={() => {
-          setDeletingContact(null);
-          setDeleteError(null);
-        }}
-        isDanger={true}
+        confirmLabel="Delete"
+        confirmVariant="danger"
+        onConfirm={handleDeleteContact}
+        onCancel={handleCloseDeleteModal}
         isLoading={isDeleting}
       />
-    </div>
+    </section>
   );
 }

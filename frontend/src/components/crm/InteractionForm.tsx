@@ -1,6 +1,15 @@
-import React, { useState, useEffect } from 'react';
-import { colors, radii, spacing, typography } from '../../lib/tokens';
-import { Interaction } from '../../services/crm';
+'use client';
+
+import React, { useState, useEffect, useId } from 'react';
+import { colors, rounded, spacing, typography } from '@/lib/tokens';
+import { ErrorAlert } from '@/components/shared/Alerts';
+import type {
+  InteractionCreate,
+  InteractionRead,
+  InteractionUpdate,
+  CRMApiError,
+  FieldError,
+} from '@/services/crm';
 
 export interface CompanyOption {
   id: number;
@@ -18,6 +27,13 @@ export interface LeadOption {
   name?: string;
 }
 
+export const DEFAULT_INTERACTION_TYPES = [
+  'call',
+  'email',
+  'meeting',
+  'note',
+];
+
 export interface InteractionFormData {
   date: string;
   type: string;
@@ -29,190 +45,232 @@ export interface InteractionFormData {
   owner?: string;
 }
 
-export interface InteractionFormProps {
-  initialValues?: Partial<InteractionFormData> | Interaction | null;
-  companies?: CompanyOption[];
-  contacts?: ContactOption[];
-  leads?: LeadOption[];
-  onSubmit: (data: InteractionFormData) => void | Promise<void>;
-  onCancel?: () => void;
-  isLoading?: boolean;
-  submitLabel?: string;
-  cancelLabel?: string;
-  serverError?: string | null;
-  serverFieldErrors?: Record<string, string>;
-  className?: string;
-  style?: React.CSSProperties;
-  'data-testid'?: string;
+export interface InteractionFormErrors {
+  date?: string;
+  type?: string;
+  summary?: string;
+  company_id?: string;
+  contact_id?: string;
+  lead_id?: string;
+  notes?: string;
+  owner?: string;
+  [key: string]: string | undefined;
 }
 
-export const INTERACTION_TYPE_OPTIONS = [
-  { label: 'Call', value: 'call' },
-  { label: 'Email', value: 'email' },
-  { label: 'Meeting', value: 'meeting' },
-  { label: 'Note', value: 'note' },
-] as const;
+export interface InteractionFormProps {
+  /** Initial values for editing or pre-populating fields */
+  initialValues?: Partial<
+    InteractionFormData | InteractionRead | InteractionCreate | InteractionUpdate
+  >;
+  /** Company options for the nullable company dropdown */
+  companies?: CompanyOption[];
+  /** Contact options for the nullable contact dropdown */
+  contacts?: ContactOption[];
+  /** Lead options for the nullable lead dropdown */
+  leads?: LeadOption[];
+  /** Interaction type options for the type dropdown */
+  types?: string[];
+  /** Callback fired when form is submitted with valid data */
+  onSubmit: (data: InteractionFormData) => void | Promise<void>;
+  /** Callback fired when cancel button is clicked */
+  onCancel?: () => void;
+  /** Whether the submit action is currently in progress */
+  isSubmitting?: boolean;
+  /** Alias for isSubmitting */
+  isLoading?: boolean;
+  /** API error message or error response object */
+  apiError?: string | CRMApiError | { message?: string; fields?: FieldError[] } | null;
+  /** Submit button text label */
+  submitLabel?: string;
+  /** Custom title header for the form card */
+  title?: string;
+  /** Additional CSS class name */
+  className?: string;
+  /** Inline style overrides */
+  style?: React.CSSProperties;
+}
 
-const formatDateValue = (val?: string | Date | null): string => {
-  if (!val) return '';
-  if (typeof val === 'string') {
-    return val.split('T')[0];
-  }
-  if (val instanceof Date) {
-    return val.toISOString().split('T')[0];
-  }
-  return '';
-};
-
-const getInitialFormData = (
-  initialValues?: Partial<InteractionFormData> | Interaction | null
-): InteractionFormData => {
-  if (!initialValues) {
-    return {
-      date: '',
-      type: 'note',
-      summary: '',
-      company_id: null,
-      contact_id: null,
-      lead_id: null,
-      notes: '',
-      owner: '',
-    };
-  }
-
-  const record = initialValues as Record<string, unknown>;
-
-  const dateVal =
-    typeof record.date === 'string' || record.date instanceof Date
-      ? formatDateValue(record.date as string | Date)
-      : typeof record.timestamp === 'string' || record.timestamp instanceof Date
-      ? formatDateValue(record.timestamp as string | Date)
-      : '';
-
-  const typeVal =
-    typeof record.type === 'string' && record.type ? record.type : 'note';
-
-  const summaryVal =
-    typeof record.summary === 'string'
-      ? record.summary
-      : typeof record.notes === 'string'
-      ? record.notes
-      : typeof record.title === 'string'
-      ? record.title
-      : typeof record.name === 'string'
-      ? record.name
-      : '';
-
-  const companyIdVal =
-    typeof record.company_id === 'number' ? record.company_id : null;
-
-  const contactIdVal =
-    typeof record.contact_id === 'number' ? record.contact_id : null;
-
-  const leadIdVal =
-    typeof record.lead_id === 'number' ? record.lead_id : null;
-
-  return {
-    date: dateVal,
-    type: typeVal,
-    summary: summaryVal,
-    company_id: companyIdVal,
-    contact_id: contactIdVal,
-    lead_id: leadIdVal,
-    notes: typeof record.notes === 'string' ? record.notes : summaryVal,
-    owner: typeof record.owner === 'string' ? record.owner : '',
-  };
-};
-
+/**
+ * InteractionForm Component
+ * Renders a form for creating or editing an Interaction entity with fields:
+ * - date (required, date input)
+ * - type (required, dropdown: call/email/meeting/note)
+ * - summary (required, text/textarea input)
+ * - company_id (nullable dropdown)
+ * - contact_id (nullable dropdown)
+ * - lead_id (nullable dropdown)
+ * - owner (optional text input)
+ * Includes inline validation errors satisfying FR-5 and FR-12.
+ */
 export const InteractionForm: React.FC<InteractionFormProps> = ({
   initialValues,
   companies = [],
   contacts = [],
   leads = [],
+  types = DEFAULT_INTERACTION_TYPES,
   onSubmit,
   onCancel,
+  isSubmitting = false,
   isLoading = false,
-  submitLabel = 'Save Interaction',
-  cancelLabel = 'Cancel',
-  serverError,
-  serverFieldErrors = {},
+  apiError,
+  submitLabel,
+  title,
   className = '',
   style,
-  'data-testid': testId = 'interaction-form',
 }) => {
-  const [formData, setFormData] = useState<InteractionFormData>(() =>
-    getInitialFormData(initialValues)
-  );
+  const formId = useId();
+  const dateInputId = `${formId}-date`;
+  const typeSelectId = `${formId}-type`;
+  const summaryInputId = `${formId}-summary`;
+  const companySelectId = `${formId}-company`;
+  const contactSelectId = `${formId}-contact`;
+  const leadSelectId = `${formId}-lead`;
+  const ownerInputId = `${formId}-owner`;
 
-  const [errors, setErrors] = useState<Record<string, string>>({});
-  const [, setTouched] = useState<Record<string, boolean>>({});
+  const pending = isSubmitting || isLoading;
+
+  const getInitialDate = (vals?: Partial<InteractionFormData | InteractionRead | InteractionCreate | InteractionUpdate>): string => {
+    const raw = vals?.date ?? (vals as { interaction_date?: string })?.interaction_date ?? (vals as { timestamp?: string })?.timestamp;
+    if (raw && typeof raw === 'string') {
+      return raw.split('T')[0];
+    }
+    if (raw === '') {
+      return '';
+    }
+    return new Date().toISOString().split('T')[0];
+  };
+
+  const [formData, setFormData] = useState<InteractionFormData>(() => {
+    return {
+      date: getInitialDate(initialValues),
+      type: initialValues?.type || 'call',
+      summary: initialValues?.summary || initialValues?.notes || '',
+      company_id: initialValues?.company_id ?? null,
+      contact_id: initialValues?.contact_id ?? null,
+      lead_id: initialValues?.lead_id ?? null,
+      notes: initialValues?.notes || '',
+      owner: initialValues?.owner || '',
+    };
+  });
+
+  const [errors, setErrors] = useState<InteractionFormErrors>({});
+  const [touched, setTouched] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
     if (initialValues) {
-      setFormData(getInitialFormData(initialValues));
+      setFormData({
+        date: getInitialDate(initialValues),
+        type: initialValues.type || 'call',
+        summary: initialValues.summary || initialValues.notes || '',
+        company_id: initialValues.company_id ?? null,
+        contact_id: initialValues.contact_id ?? null,
+        lead_id: initialValues.lead_id ?? null,
+        notes: initialValues.notes || '',
+        owner: initialValues.owner || '',
+      });
+      setErrors({});
+      setTouched({});
     }
   }, [initialValues]);
 
-  const handleChange = (
-    field: keyof InteractionFormData,
-    value: any
-  ) => {
-    setFormData((prev) => ({ ...prev, [field]: value }));
+  useEffect(() => {
+    if (!apiError) return;
 
-    if (errors[field]) {
-      setErrors((prev) => {
-        const next = { ...prev };
-        delete next[field];
-        return next;
+    if (typeof apiError === 'object' && 'fields' in apiError && Array.isArray(apiError.fields)) {
+      const serverErrors: InteractionFormErrors = {};
+      apiError.fields.forEach((f) => {
+        if (f.field && f.message) {
+          serverErrors[f.field] = f.message;
+        }
       });
+      if (Object.keys(serverErrors).length > 0) {
+        setErrors((prev) => ({ ...prev, ...serverErrors }));
+      }
     }
-  };
-
-  const handleBlur = (field: keyof InteractionFormData) => {
-    setTouched((prev) => ({ ...prev, [field]: true }));
-    const err = validateField(field, formData[field]);
-    if (err) {
-      setErrors((prev) => ({ ...prev, [field]: err }));
-    }
-  };
+  }, [apiError]);
 
   const validateField = (
     field: keyof InteractionFormData,
-    value?: any
-  ): string | null => {
-    let errorMsg: string | null = null;
-
+    value: string | number | boolean | null | undefined
+  ): string | undefined => {
     if (field === 'date') {
-      if (!value || typeof value !== 'string' || !value.trim()) {
-        errorMsg = 'Interaction date is required';
-      }
-    } else if (field === 'type') {
-      if (!value || typeof value !== 'string' || !value.trim()) {
-        errorMsg = 'Interaction type is required';
-      }
-    } else if (field === 'summary') {
-      if (!value || typeof value !== 'string' || !value.trim()) {
-        errorMsg = 'Interaction summary is required';
+      const strVal = typeof value === 'string' ? value : '';
+      if (!strVal || !strVal.trim()) {
+        return 'Date is required';
       }
     }
 
-    return errorMsg;
+    if (field === 'type') {
+      const strVal = typeof value === 'string' ? value : '';
+      if (!strVal || !strVal.trim()) {
+        return 'Interaction type is required';
+      }
+    }
+
+    if (field === 'summary') {
+      const strVal = typeof value === 'string' ? value : '';
+      if (!strVal || !strVal.trim()) {
+        return 'Summary is required';
+      }
+    }
+
+    return undefined;
   };
 
-  const validateForm = (): boolean => {
-    const newErrors: Record<string, string> = {};
+  const validateAll = (data: InteractionFormData): InteractionFormErrors => {
+    const newErrors: InteractionFormErrors = {};
 
-    const dateErr = validateField('date', formData.date);
+    const dateErr = validateField('date', data.date);
     if (dateErr) newErrors.date = dateErr;
 
-    const typeErr = validateField('type', formData.type);
+    const typeErr = validateField('type', data.type);
     if (typeErr) newErrors.type = typeErr;
 
-    const summaryErr = validateField('summary', formData.summary);
+    const summaryErr = validateField('summary', data.summary);
     if (summaryErr) newErrors.summary = summaryErr;
 
-    setErrors(newErrors);
-    return Object.keys(newErrors).length === 0;
+    return newErrors;
+  };
+
+  const handleChange = (
+    e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>
+  ) => {
+    const { name, value } = e.target;
+    const fieldName = name as keyof InteractionFormData;
+
+    let updatedValue: string | number | null = value;
+    if (fieldName === 'company_id' || fieldName === 'contact_id' || fieldName === 'lead_id') {
+      updatedValue = value === '' || value === 'null' ? null : Number(value);
+    }
+
+    setFormData((prev) => ({ ...prev, [fieldName]: updatedValue }));
+
+    if (touched[fieldName]) {
+      const fieldError = validateField(fieldName, updatedValue);
+      setErrors((prev) => ({
+        ...prev,
+        [fieldName]: fieldError,
+      }));
+    }
+  };
+
+  const handleBlur = (
+    e: React.FocusEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>
+  ) => {
+    const { name, value } = e.target;
+    const fieldName = name as keyof InteractionFormData;
+
+    let updatedValue: string | number | null = value;
+    if (fieldName === 'company_id' || fieldName === 'contact_id' || fieldName === 'lead_id') {
+      updatedValue = value === '' || value === 'null' ? null : Number(value);
+    }
+
+    setTouched((prev) => ({ ...prev, [fieldName]: true }));
+    const fieldError = validateField(fieldName, updatedValue);
+    setErrors((prev) => ({
+      ...prev,
+      [fieldName]: fieldError,
+    }));
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -225,432 +283,580 @@ export const InteractionForm: React.FC<InteractionFormProps> = ({
       company_id: true,
       contact_id: true,
       lead_id: true,
+      notes: true,
+      owner: true,
     });
 
-    if (!validateForm()) {
+    const validationErrors = validateAll(formData);
+    setErrors(validationErrors);
+
+    if (Object.keys(validationErrors).length > 0) {
+      if (validationErrors.date) {
+        document.getElementById(dateInputId)?.focus();
+      } else if (validationErrors.type) {
+        document.getElementById(typeSelectId)?.focus();
+      } else if (validationErrors.summary) {
+        document.getElementById(summaryInputId)?.focus();
+      }
       return;
     }
 
-    try {
-      const summaryTrimmed = formData.summary.trim();
-      await onSubmit({
-        date: formData.date,
-        type: formData.type.trim(),
-        summary: summaryTrimmed,
-        company_id: formData.company_id ?? null,
-        contact_id: formData.contact_id ?? null,
-        lead_id: formData.lead_id ?? null,
-        notes: summaryTrimmed,
-        owner: formData.owner?.trim() || undefined,
-      });
-    } catch {
-      // Submission error handled externally
-    }
+    const cleanedData: InteractionFormData = {
+      date: formData.date.trim(),
+      type: formData.type.trim(),
+      summary: formData.summary.trim(),
+      company_id: formData.company_id ?? null,
+      contact_id: formData.contact_id ?? null,
+      lead_id: formData.lead_id ?? null,
+      notes: formData.summary.trim(),
+      owner: formData.owner?.trim() || undefined,
+    };
+
+    await onSubmit(cleanedData);
   };
 
-  const getDateError = (): string | undefined => {
-    return errors.date || serverFieldErrors.date || serverFieldErrors.timestamp;
+  const getApiErrorMessage = (): string | null => {
+    if (!apiError) return null;
+    if (typeof apiError === 'string') return apiError;
+    if ('message' in apiError && apiError.message) return apiError.message;
+    return 'An error occurred while saving interaction details.';
   };
 
-  const getTypeError = (): string | undefined => {
-    return errors.type || serverFieldErrors.type;
-  };
+  const apiErrorMessage = getApiErrorMessage();
+  const isEditing = Boolean(initialValues && ('id' in initialValues || initialValues.summary || initialValues.notes));
+  const defaultTitle = isEditing ? 'Edit Interaction' : 'Add New Interaction';
+  const displayTitle = title ?? defaultTitle;
+  const defaultSubmitLabel = isEditing ? 'Save Interaction' : 'Create Interaction';
+  const displaySubmitLabel = submitLabel ?? defaultSubmitLabel;
 
-  const getSummaryError = (): string | undefined => {
-    return (
-      errors.summary ||
-      errors.notes ||
-      serverFieldErrors.summary ||
-      serverFieldErrors.notes
-    );
+  const formatTypeLabel = (t: string) => {
+    if (!t) return t;
+    return t.charAt(0).toUpperCase() + t.slice(1);
   };
-
-  const dateError = getDateError();
-  const typeError = getTypeError();
-  const summaryError = getSummaryError();
 
   return (
-    <form
-      data-testid={testId}
-      onSubmit={handleSubmit}
+    <div
       className={className}
-      noValidate
       style={{
-        display: 'flex',
-        flexDirection: 'column',
-        gap: spacing[4],
         backgroundColor: colors.surface.containerLowest,
-        borderRadius: radii.md,
-        padding: spacing[6],
-        border: `1px solid ${colors.surface.outlineVariant}`,
-        boxShadow: '0 4px 12px rgba(115, 92, 65, 0.05)',
+        borderRadius: rounded.lg,
+        border: `1px solid ${colors.borderVariant}`,
+        padding: spacing.xl,
+        maxWidth: '640px',
+        width: '100%',
+        boxSizing: 'border-box',
+        boxShadow: '0 4px 20px rgba(115, 92, 65, 0.08)',
         ...style,
       }}
     >
-      {/* Top-level Server Error */}
-      {serverError && (
-        <div
-          data-testid="interaction-form-server-error"
-          role="alert"
-          style={{
-            padding: `${spacing[3]} ${spacing[4]}`,
-            backgroundColor: colors.error.container,
-            border: `1px solid ${colors.error.main}`,
-            borderRadius: radii.sm,
-            color: colors.error.onContainer,
-            fontSize: typography.styles.caption.fontSize,
-            fontFamily: typography.fontFamilies.sans,
-          }}
-        >
-          {serverError}
+      <h2
+        style={{
+          fontFamily: typography['headline-sm'].fontFamily,
+          fontSize: typography['headline-sm'].fontSize,
+          fontWeight: typography['headline-sm'].fontWeight,
+          lineHeight: typography['headline-sm'].lineHeight,
+          color: colors.onSurface,
+          marginTop: 0,
+          marginBottom: spacing.lg,
+        }}
+      >
+        {displayTitle}
+      </h2>
+
+      {apiErrorMessage && (
+        <div style={{ marginBottom: spacing.lg }}>
+          <ErrorAlert message={apiErrorMessage} role="alert" />
         </div>
       )}
 
-      {/* Date Field (Required) */}
-      <div style={{ display: 'flex', flexDirection: 'column', gap: spacing[1] }}>
-        <label
-          htmlFor="interaction-date"
-          style={{
-            ...typography.styles.labelCaps,
-            color: dateError ? colors.error.main : colors.surface.onSurfaceVariant,
-            display: 'flex',
-            alignItems: 'center',
-            gap: spacing[1],
-          }}
-        >
-          Date
-          <span style={{ color: colors.error.main }}>*</span>
-        </label>
-        <input
-          id="interaction-date"
-          name="date"
-          type="date"
-          disabled={isLoading}
-          value={formData.date}
-          onChange={(e) => handleChange('date', e.target.value)}
-          onBlur={() => handleBlur('date')}
-          aria-invalid={!!dateError}
-          aria-describedby={dateError ? 'interaction-date-error' : undefined}
-          data-testid="interaction-date-input"
-          style={{
-            padding: `${spacing[2]} ${spacing[3]}`,
-            fontSize: typography.styles.bodyMd.fontSize,
-            fontFamily: typography.fontFamilies.sans,
-            borderRadius: radii.sm,
-            border: `1px solid ${dateError ? colors.error.main : colors.surface.outlineVariant}`,
-            backgroundColor: colors.surface.containerLowest,
-            color: colors.surface.onSurface,
-            outline: 'none',
-          }}
-        />
-        {dateError && (
-          <span
-            id="interaction-date-error"
-            data-testid="interaction-date-error"
-            role="alert"
+      <form onSubmit={handleSubmit} noValidate>
+        {/* Interaction Date Field (Required) */}
+        <div style={{ marginBottom: spacing.lg }}>
+          <label
+            htmlFor={dateInputId}
             style={{
-              color: colors.error.main,
-              fontSize: typography.styles.caption.fontSize,
-              fontFamily: typography.fontFamilies.sans,
+              display: 'block',
+              fontFamily: typography.labelCaps.fontFamily,
+              fontSize: typography.labelCaps.fontSize,
+              fontWeight: typography.labelCaps.fontWeight,
+              letterSpacing: typography.labelCaps.letterSpacing,
+              color: colors.onSurfaceVariant,
+              textTransform: 'uppercase',
+              marginBottom: spacing.xs,
             }}
           >
-            {dateError}
-          </span>
-        )}
-      </div>
-
-      {/* Type Field (Required Dropdown) */}
-      <div style={{ display: 'flex', flexDirection: 'column', gap: spacing[1] }}>
-        <label
-          htmlFor="interaction-type"
-          style={{
-            ...typography.styles.labelCaps,
-            color: typeError ? colors.error.main : colors.surface.onSurfaceVariant,
-            display: 'flex',
-            alignItems: 'center',
-            gap: spacing[1],
-          }}
-        >
-          Type
-          <span style={{ color: colors.error.main }}>*</span>
-        </label>
-        <select
-          id="interaction-type"
-          name="type"
-          disabled={isLoading}
-          value={formData.type}
-          onChange={(e) => handleChange('type', e.target.value)}
-          onBlur={() => handleBlur('type')}
-          aria-invalid={!!typeError}
-          aria-describedby={typeError ? 'interaction-type-error' : undefined}
-          data-testid="interaction-type-select"
-          style={{
-            padding: `${spacing[2]} ${spacing[3]}`,
-            fontSize: typography.styles.bodyMd.fontSize,
-            fontFamily: typography.fontFamilies.sans,
-            borderRadius: radii.sm,
-            border: `1px solid ${typeError ? colors.error.main : colors.surface.outlineVariant}`,
-            backgroundColor: colors.surface.containerLowest,
-            color: colors.surface.onSurface,
-            outline: 'none',
-          }}
-        >
-          <option value="">-- Select Type --</option>
-          {INTERACTION_TYPE_OPTIONS.map((opt) => (
-            <option key={opt.value} value={opt.value}>
-              {opt.label}
-            </option>
-          ))}
-        </select>
-        {typeError && (
-          <span
-            id="interaction-type-error"
-            data-testid="interaction-type-error"
-            role="alert"
+            Date <span style={{ color: colors.error }}>*</span>
+          </label>
+          <input
+            id={dateInputId}
+            type="date"
+            name="date"
+            value={formData.date}
+            onChange={handleChange}
+            onBlur={handleBlur}
+            disabled={pending}
+            aria-required="true"
+            aria-invalid={Boolean(errors.date)}
+            aria-describedby={errors.date ? `${dateInputId}-error` : undefined}
             style={{
-              color: colors.error.main,
-              fontSize: typography.styles.caption.fontSize,
-              fontFamily: typography.fontFamilies.sans,
+              width: '100%',
+              padding: `${spacing.sm} ${spacing.md}`,
+              fontFamily: typography.bodyMd.fontFamily,
+              fontSize: typography.bodyMd.fontSize,
+              lineHeight: typography.bodyMd.lineHeight,
+              color: colors.onSurface,
+              backgroundColor: colors.surface.containerLow,
+              border: `1px solid ${errors.date ? colors.error : colors.borderVariant}`,
+              borderRadius: rounded.sm,
+              outline: 'none',
+              boxSizing: 'border-box',
+            }}
+          />
+          {errors.date && (
+            <p
+              id={`${dateInputId}-error`}
+              role="alert"
+              style={{
+                fontFamily: typography.caption.fontFamily,
+                fontSize: typography.caption.fontSize,
+                color: colors.error,
+                marginTop: spacing.xs,
+                marginBottom: 0,
+              }}
+            >
+              {errors.date}
+            </p>
+          )}
+        </div>
+
+        {/* Interaction Type Dropdown (Required) */}
+        <div style={{ marginBottom: spacing.lg }}>
+          <label
+            htmlFor={typeSelectId}
+            style={{
+              display: 'block',
+              fontFamily: typography.labelCaps.fontFamily,
+              fontSize: typography.labelCaps.fontSize,
+              fontWeight: typography.labelCaps.fontWeight,
+              letterSpacing: typography.labelCaps.letterSpacing,
+              color: colors.onSurfaceVariant,
+              textTransform: 'uppercase',
+              marginBottom: spacing.xs,
             }}
           >
-            {typeError}
-          </span>
-        )}
-      </div>
-
-      {/* Summary Field (Required Textarea) */}
-      <div style={{ display: 'flex', flexDirection: 'column', gap: spacing[1] }}>
-        <label
-          htmlFor="interaction-summary"
-          style={{
-            ...typography.styles.labelCaps,
-            color: summaryError ? colors.error.main : colors.surface.onSurfaceVariant,
-            display: 'flex',
-            alignItems: 'center',
-            gap: spacing[1],
-          }}
-        >
-          Summary
-          <span style={{ color: colors.error.main }}>*</span>
-        </label>
-        <textarea
-          id="interaction-summary"
-          name="summary"
-          rows={3}
-          disabled={isLoading}
-          value={formData.summary}
-          onChange={(e) => handleChange('summary', e.target.value)}
-          onBlur={() => handleBlur('summary')}
-          aria-invalid={!!summaryError}
-          aria-describedby={summaryError ? 'interaction-summary-error' : undefined}
-          data-testid="interaction-summary-input"
-          placeholder="e.g. Discussed proposal details and next steps"
-          style={{
-            padding: `${spacing[2]} ${spacing[3]}`,
-            fontSize: typography.styles.bodyMd.fontSize,
-            fontFamily: typography.fontFamilies.sans,
-            borderRadius: radii.sm,
-            border: `1px solid ${summaryError ? colors.error.main : colors.surface.outlineVariant}`,
-            backgroundColor: colors.surface.containerLowest,
-            color: colors.surface.onSurface,
-            outline: 'none',
-            resize: 'vertical',
-          }}
-        />
-        {summaryError && (
-          <span
-            id="interaction-summary-error"
-            data-testid="interaction-summary-error"
-            role="alert"
+            Interaction Type <span style={{ color: colors.error }}>*</span>
+          </label>
+          <select
+            id={typeSelectId}
+            name="type"
+            value={formData.type}
+            onChange={handleChange}
+            onBlur={handleBlur}
+            disabled={pending}
+            aria-required="true"
+            aria-invalid={Boolean(errors.type)}
+            aria-describedby={errors.type ? `${typeSelectId}-error` : undefined}
             style={{
-              color: colors.error.main,
-              fontSize: typography.styles.caption.fontSize,
-              fontFamily: typography.fontFamilies.sans,
+              width: '100%',
+              padding: `${spacing.sm} ${spacing.md}`,
+              fontFamily: typography.bodyMd.fontFamily,
+              fontSize: typography.bodyMd.fontSize,
+              lineHeight: typography.bodyMd.lineHeight,
+              color: colors.onSurface,
+              backgroundColor: colors.surface.containerLow,
+              border: `1px solid ${errors.type ? colors.error : colors.borderVariant}`,
+              borderRadius: rounded.sm,
+              outline: 'none',
+              boxSizing: 'border-box',
             }}
           >
-            {summaryError}
-          </span>
-        )}
-      </div>
+            {types.map((t) => (
+              <option key={t} value={t}>
+                {formatTypeLabel(t)}
+              </option>
+            ))}
+          </select>
+          {errors.type && (
+            <p
+              id={`${typeSelectId}-error`}
+              role="alert"
+              style={{
+                fontFamily: typography.caption.fontFamily,
+                fontSize: typography.caption.fontSize,
+                color: colors.error,
+                marginTop: spacing.xs,
+                marginBottom: 0,
+              }}
+            >
+              {errors.type}
+            </p>
+          )}
+        </div>
 
-      {/* Company Dropdown (Nullable) */}
-      <div style={{ display: 'flex', flexDirection: 'column', gap: spacing[1] }}>
-        <label
-          htmlFor="interaction-company"
-          style={{
-            ...typography.styles.labelCaps,
-            color: colors.surface.onSurfaceVariant,
-          }}
-        >
-          Company
-        </label>
-        <select
-          id="interaction-company"
-          name="company_id"
-          disabled={isLoading}
-          value={formData.company_id ?? ''}
-          onChange={(e) =>
-            handleChange('company_id', e.target.value ? Number(e.target.value) : null)
-          }
-          onBlur={() => handleBlur('company_id')}
-          data-testid="interaction-company-select"
-          style={{
-            padding: `${spacing[2]} ${spacing[3]}`,
-            fontSize: typography.styles.bodyMd.fontSize,
-            fontFamily: typography.fontFamilies.sans,
-            borderRadius: radii.sm,
-            border: `1px solid ${colors.surface.outlineVariant}`,
-            backgroundColor: colors.surface.containerLowest,
-            color: colors.surface.onSurface,
-            outline: 'none',
-          }}
-        >
-          <option value="">Unassigned / No company</option>
-          {companies.map((company) => (
-            <option key={company.id} value={company.id}>
-              {company.name}
-            </option>
-          ))}
-        </select>
-      </div>
+        {/* Summary Field (Required) */}
+        <div style={{ marginBottom: spacing.lg }}>
+          <label
+            htmlFor={summaryInputId}
+            style={{
+              display: 'block',
+              fontFamily: typography.labelCaps.fontFamily,
+              fontSize: typography.labelCaps.fontSize,
+              fontWeight: typography.labelCaps.fontWeight,
+              letterSpacing: typography.labelCaps.letterSpacing,
+              color: colors.onSurfaceVariant,
+              textTransform: 'uppercase',
+              marginBottom: spacing.xs,
+            }}
+          >
+            Summary <span style={{ color: colors.error }}>*</span>
+          </label>
+          <textarea
+            id={summaryInputId}
+            name="summary"
+            value={formData.summary}
+            onChange={handleChange}
+            onBlur={handleBlur}
+            disabled={pending}
+            rows={3}
+            placeholder="Describe the interaction notes or outcome..."
+            aria-required="true"
+            aria-invalid={Boolean(errors.summary)}
+            aria-describedby={errors.summary ? `${summaryInputId}-error` : undefined}
+            style={{
+              width: '100%',
+              padding: `${spacing.sm} ${spacing.md}`,
+              fontFamily: typography.bodyMd.fontFamily,
+              fontSize: typography.bodyMd.fontSize,
+              lineHeight: typography.bodyMd.lineHeight,
+              color: colors.onSurface,
+              backgroundColor: colors.surface.containerLow,
+              border: `1px solid ${errors.summary ? colors.error : colors.borderVariant}`,
+              borderRadius: rounded.sm,
+              outline: 'none',
+              resize: 'vertical',
+              boxSizing: 'border-box',
+            }}
+          />
+          {errors.summary && (
+            <p
+              id={`${summaryInputId}-error`}
+              role="alert"
+              style={{
+                fontFamily: typography.caption.fontFamily,
+                fontSize: typography.caption.fontSize,
+                color: colors.error,
+                marginTop: spacing.xs,
+                marginBottom: 0,
+              }}
+            >
+              {errors.summary}
+            </p>
+          )}
+        </div>
 
-      {/* Contact Dropdown (Nullable) */}
-      <div style={{ display: 'flex', flexDirection: 'column', gap: spacing[1] }}>
-        <label
-          htmlFor="interaction-contact"
-          style={{
-            ...typography.styles.labelCaps,
-            color: colors.surface.onSurfaceVariant,
-          }}
-        >
-          Contact
-        </label>
-        <select
-          id="interaction-contact"
-          name="contact_id"
-          disabled={isLoading}
-          value={formData.contact_id ?? ''}
-          onChange={(e) =>
-            handleChange('contact_id', e.target.value ? Number(e.target.value) : null)
-          }
-          onBlur={() => handleBlur('contact_id')}
-          data-testid="interaction-contact-select"
-          style={{
-            padding: `${spacing[2]} ${spacing[3]}`,
-            fontSize: typography.styles.bodyMd.fontSize,
-            fontFamily: typography.fontFamilies.sans,
-            borderRadius: radii.sm,
-            border: `1px solid ${colors.surface.outlineVariant}`,
-            backgroundColor: colors.surface.containerLowest,
-            color: colors.surface.onSurface,
-            outline: 'none',
-          }}
-        >
-          <option value="">Unassigned / No contact</option>
-          {contacts.map((contact) => (
-            <option key={contact.id} value={contact.id}>
-              {contact.name}
-            </option>
-          ))}
-        </select>
-      </div>
+        {/* Company Dropdown (Nullable) */}
+        <div style={{ marginBottom: spacing.lg }}>
+          <label
+            htmlFor={companySelectId}
+            style={{
+              display: 'block',
+              fontFamily: typography.labelCaps.fontFamily,
+              fontSize: typography.labelCaps.fontSize,
+              fontWeight: typography.labelCaps.fontWeight,
+              letterSpacing: typography.labelCaps.letterSpacing,
+              color: colors.onSurfaceVariant,
+              textTransform: 'uppercase',
+              marginBottom: spacing.xs,
+            }}
+          >
+            Company (Optional)
+          </label>
+          <select
+            id={companySelectId}
+            name="company_id"
+            value={formData.company_id ?? ''}
+            onChange={handleChange}
+            onBlur={handleBlur}
+            disabled={pending}
+            aria-invalid={Boolean(errors.company_id)}
+            aria-describedby={errors.company_id ? `${companySelectId}-error` : undefined}
+            style={{
+              width: '100%',
+              padding: `${spacing.sm} ${spacing.md}`,
+              fontFamily: typography.bodyMd.fontFamily,
+              fontSize: typography.bodyMd.fontSize,
+              lineHeight: typography.bodyMd.lineHeight,
+              color: colors.onSurface,
+              backgroundColor: colors.surface.containerLow,
+              border: `1px solid ${errors.company_id ? colors.error : colors.borderVariant}`,
+              borderRadius: rounded.sm,
+              outline: 'none',
+              boxSizing: 'border-box',
+            }}
+          >
+            <option value="">-- No Company --</option>
+            {companies.map((company) => (
+              <option key={company.id} value={company.id}>
+                {company.name}
+              </option>
+            ))}
+          </select>
+          {errors.company_id && (
+            <p
+              id={`${companySelectId}-error`}
+              role="alert"
+              style={{
+                fontFamily: typography.caption.fontFamily,
+                fontSize: typography.caption.fontSize,
+                color: colors.error,
+                marginTop: spacing.xs,
+                marginBottom: 0,
+              }}
+            >
+              {errors.company_id}
+            </p>
+          )}
+        </div>
 
-      {/* Lead Dropdown (Nullable) */}
-      <div style={{ display: 'flex', flexDirection: 'column', gap: spacing[1] }}>
-        <label
-          htmlFor="interaction-lead"
-          style={{
-            ...typography.styles.labelCaps,
-            color: colors.surface.onSurfaceVariant,
-          }}
-        >
-          Lead
-        </label>
-        <select
-          id="interaction-lead"
-          name="lead_id"
-          disabled={isLoading}
-          value={formData.lead_id ?? ''}
-          onChange={(e) =>
-            handleChange('lead_id', e.target.value ? Number(e.target.value) : null)
-          }
-          onBlur={() => handleBlur('lead_id')}
-          data-testid="interaction-lead-select"
-          style={{
-            padding: `${spacing[2]} ${spacing[3]}`,
-            fontSize: typography.styles.bodyMd.fontSize,
-            fontFamily: typography.fontFamilies.sans,
-            borderRadius: radii.sm,
-            border: `1px solid ${colors.surface.outlineVariant}`,
-            backgroundColor: colors.surface.containerLowest,
-            color: colors.surface.onSurface,
-            outline: 'none',
-          }}
-        >
-          <option value="">Unassigned / No lead</option>
-          {leads.map((lead) => (
-            <option key={lead.id} value={lead.id}>
-              {lead.title || lead.name || `Lead #${lead.id}`}
-            </option>
-          ))}
-        </select>
-      </div>
+        {/* Contact Dropdown (Nullable) */}
+        <div style={{ marginBottom: spacing.lg }}>
+          <label
+            htmlFor={contactSelectId}
+            style={{
+              display: 'block',
+              fontFamily: typography.labelCaps.fontFamily,
+              fontSize: typography.labelCaps.fontSize,
+              fontWeight: typography.labelCaps.fontWeight,
+              letterSpacing: typography.labelCaps.letterSpacing,
+              color: colors.onSurfaceVariant,
+              textTransform: 'uppercase',
+              marginBottom: spacing.xs,
+            }}
+          >
+            Contact (Optional)
+          </label>
+          <select
+            id={contactSelectId}
+            name="contact_id"
+            value={formData.contact_id ?? ''}
+            onChange={handleChange}
+            onBlur={handleBlur}
+            disabled={pending}
+            aria-invalid={Boolean(errors.contact_id)}
+            aria-describedby={errors.contact_id ? `${contactSelectId}-error` : undefined}
+            style={{
+              width: '100%',
+              padding: `${spacing.sm} ${spacing.md}`,
+              fontFamily: typography.bodyMd.fontFamily,
+              fontSize: typography.bodyMd.fontSize,
+              lineHeight: typography.bodyMd.lineHeight,
+              color: colors.onSurface,
+              backgroundColor: colors.surface.containerLow,
+              border: `1px solid ${errors.contact_id ? colors.error : colors.borderVariant}`,
+              borderRadius: rounded.sm,
+              outline: 'none',
+              boxSizing: 'border-box',
+            }}
+          >
+            <option value="">-- No Contact --</option>
+            {contacts.map((contact) => (
+              <option key={contact.id} value={contact.id}>
+                {contact.name}
+              </option>
+            ))}
+          </select>
+          {errors.contact_id && (
+            <p
+              id={`${contactSelectId}-error`}
+              role="alert"
+              style={{
+                fontFamily: typography.caption.fontFamily,
+                fontSize: typography.caption.fontSize,
+                color: colors.error,
+                marginTop: spacing.xs,
+                marginBottom: 0,
+              }}
+            >
+              {errors.contact_id}
+            </p>
+          )}
+        </div>
 
-      {/* Form Action Buttons */}
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'flex-end',
-          gap: spacing[3],
-          marginTop: spacing[2],
-        }}
-      >
-        {onCancel && (
+        {/* Lead Dropdown (Nullable) */}
+        <div style={{ marginBottom: spacing.lg }}>
+          <label
+            htmlFor={leadSelectId}
+            style={{
+              display: 'block',
+              fontFamily: typography.labelCaps.fontFamily,
+              fontSize: typography.labelCaps.fontSize,
+              fontWeight: typography.labelCaps.fontWeight,
+              letterSpacing: typography.labelCaps.letterSpacing,
+              color: colors.onSurfaceVariant,
+              textTransform: 'uppercase',
+              marginBottom: spacing.xs,
+            }}
+          >
+            Lead (Optional)
+          </label>
+          <select
+            id={leadSelectId}
+            name="lead_id"
+            value={formData.lead_id ?? ''}
+            onChange={handleChange}
+            onBlur={handleBlur}
+            disabled={pending}
+            aria-invalid={Boolean(errors.lead_id)}
+            aria-describedby={errors.lead_id ? `${leadSelectId}-error` : undefined}
+            style={{
+              width: '100%',
+              padding: `${spacing.sm} ${spacing.md}`,
+              fontFamily: typography.bodyMd.fontFamily,
+              fontSize: typography.bodyMd.fontSize,
+              lineHeight: typography.bodyMd.lineHeight,
+              color: colors.onSurface,
+              backgroundColor: colors.surface.containerLow,
+              border: `1px solid ${errors.lead_id ? colors.error : colors.borderVariant}`,
+              borderRadius: rounded.sm,
+              outline: 'none',
+              boxSizing: 'border-box',
+            }}
+          >
+            <option value="">-- No Lead --</option>
+            {leads.map((lead) => (
+              <option key={lead.id} value={lead.id}>
+                {lead.title || lead.name || `Lead #${lead.id}`}
+              </option>
+            ))}
+          </select>
+          {errors.lead_id && (
+            <p
+              id={`${leadSelectId}-error`}
+              role="alert"
+              style={{
+                fontFamily: typography.caption.fontFamily,
+                fontSize: typography.caption.fontSize,
+                color: colors.error,
+                marginTop: spacing.xs,
+                marginBottom: 0,
+              }}
+            >
+              {errors.lead_id}
+            </p>
+          )}
+        </div>
+
+        {/* Owner Field (Optional) */}
+        <div style={{ marginBottom: spacing.xl }}>
+          <label
+            htmlFor={ownerInputId}
+            style={{
+              display: 'block',
+              fontFamily: typography.labelCaps.fontFamily,
+              fontSize: typography.labelCaps.fontSize,
+              fontWeight: typography.labelCaps.fontWeight,
+              letterSpacing: typography.labelCaps.letterSpacing,
+              color: colors.onSurfaceVariant,
+              textTransform: 'uppercase',
+              marginBottom: spacing.xs,
+            }}
+          >
+            Owner
+          </label>
+          <input
+            id={ownerInputId}
+            type="text"
+            name="owner"
+            value={formData.owner ?? ''}
+            onChange={handleChange}
+            onBlur={handleBlur}
+            disabled={pending}
+            placeholder="Assignee / Owner name"
+            aria-invalid={Boolean(errors.owner)}
+            aria-describedby={errors.owner ? `${ownerInputId}-error` : undefined}
+            style={{
+              width: '100%',
+              padding: `${spacing.sm} ${spacing.md}`,
+              fontFamily: typography.bodyMd.fontFamily,
+              fontSize: typography.bodyMd.fontSize,
+              lineHeight: typography.bodyMd.lineHeight,
+              color: colors.onSurface,
+              backgroundColor: colors.surface.containerLow,
+              border: `1px solid ${errors.owner ? colors.error : colors.borderVariant}`,
+              borderRadius: rounded.sm,
+              outline: 'none',
+              boxSizing: 'border-box',
+            }}
+          />
+          {errors.owner && (
+            <p
+              id={`${ownerInputId}-error`}
+              role="alert"
+              style={{
+                fontFamily: typography.caption.fontFamily,
+                fontSize: typography.caption.fontSize,
+                color: colors.error,
+                marginTop: spacing.xs,
+                marginBottom: 0,
+              }}
+            >
+              {errors.owner}
+            </p>
+          )}
+        </div>
+
+        {/* Form Action Buttons */}
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'flex-end',
+            gap: spacing.md,
+            marginTop: spacing.xl,
+          }}
+        >
+          {onCancel && (
+            <button
+              type="button"
+              onClick={onCancel}
+              disabled={pending}
+              style={{
+                padding: `${spacing.sm} ${spacing.lg}`,
+                fontFamily: typography.bodyMd.fontFamily,
+                fontSize: typography.bodyMd.fontSize,
+                fontWeight: 500,
+                color: colors.onSurfaceVariant,
+                backgroundColor: 'transparent',
+                border: `1px solid ${colors.borderVariant}`,
+                borderRadius: rounded.md,
+                cursor: pending ? 'not-allowed' : 'pointer',
+                opacity: pending ? 0.6 : 1,
+              }}
+            >
+              Cancel
+            </button>
+          )}
+
           <button
-            type="button"
-            onClick={onCancel}
-            disabled={isLoading}
-            data-testid="interaction-cancel-button"
+            type="submit"
+            disabled={pending}
             style={{
-              padding: `${spacing[2]} ${spacing[4]}`,
-              fontSize: typography.styles.bodyMd.fontSize,
-              fontFamily: typography.fontFamilies.sans,
+              padding: `${spacing.sm} ${spacing.lg}`,
+              fontFamily: typography.bodyMd.fontFamily,
+              fontSize: typography.bodyMd.fontSize,
               fontWeight: 500,
-              borderRadius: radii.sm,
-              border: `1px solid ${colors.surface.outlineVariant}`,
-              backgroundColor: 'transparent',
-              color: colors.surface.onSurface,
-              cursor: isLoading ? 'not-allowed' : 'pointer',
-              opacity: isLoading ? 0.6 : 1,
+              color: colors.onPrimary,
+              backgroundColor: colors.primary,
+              border: 'none',
+              borderRadius: rounded.md,
+              cursor: pending ? 'not-allowed' : 'pointer',
+              opacity: pending ? 0.7 : 1,
             }}
           >
-            {cancelLabel}
+            {pending ? 'Saving...' : displaySubmitLabel}
           </button>
-        )}
-        <button
-          type="submit"
-          disabled={isLoading}
-          data-testid="interaction-submit-button"
-          style={{
-            padding: `${spacing[2]} ${spacing[5]}`,
-            fontSize: typography.styles.bodyMd.fontSize,
-            fontFamily: typography.fontFamilies.sans,
-            fontWeight: 500,
-            borderRadius: radii.sm,
-            border: 'none',
-            backgroundColor: colors.accent.primary,
-            color: colors.accent.onPrimary,
-            cursor: isLoading ? 'not-allowed' : 'pointer',
-            opacity: isLoading ? 0.7 : 1,
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: spacing[2],
-          }}
-        >
-          {isLoading ? 'Saving...' : submitLabel}
-        </button>
-      </div>
-    </form>
+        </div>
+      </form>
+    </div>
   );
 };

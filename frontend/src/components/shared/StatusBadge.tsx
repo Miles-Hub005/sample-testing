@@ -1,104 +1,37 @@
 import React from 'react';
-import { colors, radii, spacing, typography } from '../../lib/tokens';
+import { colors, rounded, spacing, typography } from '@/lib/tokens';
 
-export type StatusVariant = 'success' | 'warning' | 'error' | 'info' | 'neutral';
-export type StatusSize = 'sm' | 'md' | 'lg';
+export type StatusVariant = 'success' |'primary' | 'warning' | 'error' | 'info' | 'neutral';
 
 export interface StatusBadgeProps {
-  /** Raw status string or name (e.g. 'active', 'in_progress', 'completed', 'overdue') */
-  status?: string;
-  /** Explicit text label. If omitted, derived from status or variant. */
-  label?: string;
-  /** Visual variant. If omitted, automatically derived from status. */
+  /** Text label displayed inside the status badge */
+  label: string;
+  /**
+   * Status type or name. Determines color scheme and default icon.
+   * Accepts standard variants ('success', 'warning', 'error', 'info', 'neutral')
+   * or common status strings ('active', 'completed', 'overdue', 'pending', etc.)
+   */
+  status?: StatusVariant | string;
+  /** Explicit variant override */
   variant?: StatusVariant;
-  /** Custom icon element. If omitted, default SVG icon for variant is used. */
-  icon?: React.ReactNode;
-  /** Badge size. Defaults to 'md'. */
-  size?: StatusSize;
-  /** Custom aria-label for accessibility */
+  /**
+   * Custom icon element, or set to null/false to suppress icon.
+   * If left undefined, renders default status icon corresponding to variant.
+   */
+  icon?: React.ReactNode | null | boolean;
+  /** Size variant of the badge */
+  size?: 'sm' | 'md' | 'lg';
+  /** Custom aria-label for screen readers */
   ariaLabel?: string;
-  /** Additional CSS class name */
+  /** Custom aria-describedby attribute referencing an element with further description */
+  ariaDescribedBy?: string;
+  /** Additional CSS class names */
   className?: string;
-  /** Inline style overrides */
+  /** Custom inline style overrides */
   style?: React.CSSProperties;
 }
 
-/**
- * Automatically derives a StatusVariant from a raw status string.
- */
-export function deriveVariantFromStatus(status?: string): StatusVariant {
-  if (!status) return 'neutral';
-  const s = status.toLowerCase().trim().replace(/[-_]/g, ' ');
-
-  if (
-    s.includes('success') ||
-    s.includes('completed') ||
-    s.includes('complete') ||
-    s.includes('won') ||
-    s.includes('qualified') ||
-    s.includes('active') ||
-    s.includes('done') ||
-    s.includes('passed')
-  ) {
-    return 'success';
-  }
-
-  if (
-    s.includes('warning') ||
-    s.includes('pending') ||
-    s.includes('in progress') ||
-    s.includes('contacted') ||
-    s.includes('scheduled') ||
-    s.includes('waiting')
-  ) {
-    return 'warning';
-  }
-
-  if (
-    s.includes('error') ||
-    s.includes('overdue') ||
-    s.includes('lost') ||
-    s.includes('unqualified') ||
-    s.includes('failed') ||
-    s.includes('rejected') ||
-    s.includes('blocked') ||
-    s.includes('cancelled') ||
-    s.includes('canceled')
-  ) {
-    return 'error';
-  }
-
-  if (
-    s.includes('info') ||
-    s.includes('new') ||
-    s.includes('draft') ||
-    s.includes('open')
-  ) {
-    return 'info';
-  }
-
-  return 'neutral';
-}
-
-/**
- * Formats status text to Title Case label if explicit label is not provided.
- */
-export function formatStatusLabel(status?: string, variant?: StatusVariant): string {
-  if (status) {
-    return status
-      .replace(/[-_]/g, ' ')
-      .trim()
-      .split(/\s+/)
-      .map((word) => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
-      .join(' ');
-  }
-  if (variant) {
-    return variant.charAt(0).toUpperCase() + variant.slice(1);
-  }
-  return 'Status';
-}
-
-const DefaultSuccessIcon: React.FC<{ size: number }> = ({ size }) => (
+const SuccessIcon: React.FC<{ size: number }> = ({ size }) => (
   <svg
     width={size}
     height={size}
@@ -106,10 +39,10 @@ const DefaultSuccessIcon: React.FC<{ size: number }> = ({ size }) => (
     fill="none"
     xmlns="http://www.w3.org/2000/svg"
     aria-hidden="true"
-    data-testid="status-badge-icon-success"
+    focusable="false"
   >
     <path
-      d="M13.25 4.75L6 12L2.75 8.75"
+      d="M13.3332 4L5.99984 11.3333L2.6665 8"
       stroke="currentColor"
       strokeWidth="2"
       strokeLinecap="round"
@@ -118,7 +51,7 @@ const DefaultSuccessIcon: React.FC<{ size: number }> = ({ size }) => (
   </svg>
 );
 
-const DefaultWarningIcon: React.FC<{ size: number }> = ({ size }) => (
+const WarningIcon: React.FC<{ size: number }> = ({ size }) => (
   <svg
     width={size}
     height={size}
@@ -126,26 +59,19 @@ const DefaultWarningIcon: React.FC<{ size: number }> = ({ size }) => (
     fill="none"
     xmlns="http://www.w3.org/2000/svg"
     aria-hidden="true"
-    data-testid="status-badge-icon-warning"
+    focusable="false"
   >
     <path
-      d="M8 1.75L1.25 13.25H14.75L8 1.75Z"
+      d="M8 5V8.33333M8 11V11.3333M1.88666 12.6667H14.1133C14.7333 12.6667 15.12 11.9933 14.8067 11.46L8.69333 1.12667C8.38666 0.593333 7.61333 0.593333 7.30666 1.12667L1.19333 11.46C0.88 11.9933 1.26666 12.6667 1.88666 12.6667Z"
       stroke="currentColor"
-      strokeWidth="1.75"
+      strokeWidth="1.5"
       strokeLinecap="round"
       strokeLinejoin="round"
     />
-    <path
-      d="M8 6V9"
-      stroke="currentColor"
-      strokeWidth="1.75"
-      strokeLinecap="round"
-    />
-    <circle cx="8" cy="11.25" r="0.85" fill="currentColor" />
   </svg>
 );
 
-const DefaultErrorIcon: React.FC<{ size: number }> = ({ size }) => (
+const ErrorIcon: React.FC<{ size: number }> = ({ size }) => (
   <svg
     width={size}
     height={size}
@@ -153,19 +79,19 @@ const DefaultErrorIcon: React.FC<{ size: number }> = ({ size }) => (
     fill="none"
     xmlns="http://www.w3.org/2000/svg"
     aria-hidden="true"
-    data-testid="status-badge-icon-error"
+    focusable="false"
   >
-    <circle cx="8" cy="8" r="6" stroke="currentColor" strokeWidth="1.75" />
     <path
-      d="M5.5 5.5L10.5 10.5M10.5 5.5L5.5 10.5"
+      d="M8 5V8.33333M8 11H8.00667M14.6667 8C14.6667 11.6819 11.6819 14.6667 8 14.6667C4.3181 14.6667 1.33333 11.6819 1.33333 8C1.33333 4.3181 4.3181 1.33333 8 1.33333C11.6819 1.33333 14.6667 4.3181 14.6667 8Z"
       stroke="currentColor"
-      strokeWidth="1.75"
+      strokeWidth="1.5"
       strokeLinecap="round"
+      strokeLinejoin="round"
     />
   </svg>
 );
 
-const DefaultInfoIcon: React.FC<{ size: number }> = ({ size }) => (
+const InfoIcon: React.FC<{ size: number }> = ({ size }) => (
   <svg
     width={size}
     height={size}
@@ -173,20 +99,19 @@ const DefaultInfoIcon: React.FC<{ size: number }> = ({ size }) => (
     fill="none"
     xmlns="http://www.w3.org/2000/svg"
     aria-hidden="true"
-    data-testid="status-badge-icon-info"
+    focusable="false"
   >
-    <circle cx="8" cy="8" r="6" stroke="currentColor" strokeWidth="1.75" />
     <path
-      d="M8 7.25V11"
+      d="M8 14.6667C11.6819 14.6667 14.6667 11.6819 14.6667 8C14.6667 4.3181 11.6819 1.33333 8 1.33333C4.3181 1.33333 1.33333 4.3181 1.33333 8C1.33333 11.6819 4.3181 14.6667 8 14.6667ZM8 5H8.00667M8 7.33333V11"
       stroke="currentColor"
-      strokeWidth="1.75"
+      strokeWidth="1.5"
       strokeLinecap="round"
+      strokeLinejoin="round"
     />
-    <circle cx="8" cy="5" r="0.85" fill="currentColor" />
   </svg>
 );
 
-const DefaultNeutralIcon: React.FC<{ size: number }> = ({ size }) => (
+const NeutralIcon: React.FC<{ size: number }> = ({ size }) => (
   <svg
     width={size}
     height={size}
@@ -194,131 +119,176 @@ const DefaultNeutralIcon: React.FC<{ size: number }> = ({ size }) => (
     fill="none"
     xmlns="http://www.w3.org/2000/svg"
     aria-hidden="true"
-    data-testid="status-badge-icon-neutral"
+    focusable="false"
   >
-    <circle cx="8" cy="8" r="3.5" fill="currentColor" />
+    <circle cx="8" cy="8" r="4" fill="currentColor" />
   </svg>
 );
+
+const VARIANT_STYLES: Record<
+  StatusVariant,
+  {
+    backgroundColor: string;
+    borderColor: string;
+    color: string;
+    DefaultIcon: React.FC<{ size: number }>;
+  }
+> = {
+  success: {
+    backgroundColor: '#e8f5e9',
+    borderColor: '#a5d6a7',
+    color: '#1b5e20',
+    DefaultIcon: SuccessIcon,
+  },
+  warning: {
+    backgroundColor: '#fff3e0',
+    borderColor: '#ffe0b2',
+    color: '#e65100',
+    DefaultIcon: WarningIcon,
+  },
+  error: {
+    backgroundColor: '#ffebee',
+    borderColor: '#ffcdd2',
+    color: '#b71c1c',
+    DefaultIcon: ErrorIcon,
+  },
+  info: {
+    backgroundColor: '#e1f5fe',
+    borderColor: '#b3e5fc',
+    color: '#01579b',
+    DefaultIcon: InfoIcon,
+  },
+  neutral: {
+    backgroundColor: colors.surface.containerHigh,
+    borderColor: colors.borderVariant,
+    color: colors.grays[800],
+    DefaultIcon: NeutralIcon,
+  },
+};
+
+const SIZE_STYLES = {
+  sm: {
+    padding: `${spacing.xs} ${spacing.sm}`,
+    fontSize: typography.sizes['label-caps'].fontSize,
+    iconSize: 12,
+    gap: spacing.xs,
+  },
+  md: {
+    padding: '6px 12px',
+    fontSize: typography.sizes.caption.fontSize,
+    iconSize: 14,
+    gap: '6px',
+  },
+  lg: {
+    padding: `${spacing.sm} ${spacing.md}`,
+    fontSize: typography.sizes['body-sm'].fontSize,
+    iconSize: 16,
+    gap: spacing.sm,
+  },
+};
 
 /**
- * StatusBadge component providing accessible status indicators with
- * text labels, distinct icons, and design token styling (not color-only).
+ * Maps status strings or explicit variants to a resolved StatusVariant.
+ */
+export function resolveVariant(
+  status?: StatusVariant | string,
+  explicitVariant?: StatusVariant
+): StatusVariant {
+  if (explicitVariant) return explicitVariant;
+  if (!status) return 'neutral';
+
+  const normalized = status.toLowerCase().trim();
+
+  if (
+    ['success', 'completed', 'active', 'won', 'paid', 'approved', 'resolved'].includes(
+      normalized
+    )
+  ) {
+    return 'success';
+  }
+  if (
+    ['warning', 'pending', 'in_progress', 'due_soon', 'review', 'medium'].includes(
+      normalized
+    )
+  ) {
+    return 'warning';
+  }
+  if (
+    ['error', 'danger', 'overdue', 'lost', 'failed', 'cancelled', 'high', 'critical'].includes(
+      normalized
+    )
+  ) {
+    return 'error';
+  }
+  if (['info', 'new', 'open', 'draft', 'low'].includes(normalized)) {
+    return 'info';
+  }
+  if (['neutral', 'inactive', 'archived', 'closed'].includes(normalized)) {
+    return 'neutral';
+  }
+
+  return 'neutral';
+}
+
+/**
+ * StatusBadge component displays a status indicator badge with text label, icon,
+ * and accessible styling conforming to accessibility guidelines (not color-only).
  */
 export const StatusBadge: React.FC<StatusBadgeProps> = ({
-  status,
   label,
-  variant,
+  status,
+  variant: explicitVariant,
   icon,
   size = 'md',
   ariaLabel,
-  className,
-  style,
+  ariaDescribedBy,
+  className = '',
+  style = {},
 }) => {
-  const resolvedVariant: StatusVariant = variant || deriveVariantFromStatus(status);
-  const displayLabel = label || formatStatusLabel(status, resolvedVariant);
+  const resolvedVariant = resolveVariant(status, explicitVariant);
+  const variantStyle = VARIANT_STYLES[resolvedVariant];
+  const sizeStyle = SIZE_STYLES[size] || SIZE_STYLES.md;
 
-  const variantStyles = {
-    success: {
-      backgroundColor: colors.success.container,
-      color: colors.success.onContainer,
-      border: `1px solid ${colors.success.main}`,
-    },
-    warning: {
-      backgroundColor: colors.warning.container,
-      color: colors.warning.onContainer,
-      border: `1px solid ${colors.warning.main}`,
-    },
-    error: {
-      backgroundColor: colors.error.container,
-      color: colors.error.onContainer,
-      border: `1px solid ${colors.error.main}`,
-    },
-    info: {
-      backgroundColor: '#eef4fa',
-      color: colors.tertiary.main,
-      border: `1px solid ${colors.tertiary.container}`,
-    },
-    neutral: {
-      backgroundColor: colors.grays[100],
-      color: colors.grays[900],
-      border: `1px solid ${colors.grays[600]}`,
-    },
-  }[resolvedVariant];
+  const computedAriaLabel = ariaLabel || `${label} status`;
 
-  const sizeConfig = {
-    sm: {
-      padding: `${spacing[0.5]} ${spacing[2]}`,
-      fontSize: '11px',
-      iconSize: 12,
-      gap: spacing[1],
-    },
-    md: {
-      padding: `${spacing[1]} 10px`,
-      fontSize: '12px',
-      iconSize: 14,
-      gap: '6px',
-    },
-    lg: {
-      padding: `${spacing[1.5]} ${spacing[3]}`,
-      fontSize: '14px',
-      iconSize: 16,
-      gap: spacing[2],
-    },
-  }[size];
-
-  const renderDefaultIcon = () => {
-    switch (resolvedVariant) {
-      case 'success':
-        return <DefaultSuccessIcon size={sizeConfig.iconSize} />;
-      case 'warning':
-        return <DefaultWarningIcon size={sizeConfig.iconSize} />;
-      case 'error':
-        return <DefaultErrorIcon size={sizeConfig.iconSize} />;
-      case 'info':
-        return <DefaultInfoIcon size={sizeConfig.iconSize} />;
-      case 'neutral':
-      default:
-        return <DefaultNeutralIcon size={sizeConfig.iconSize} />;
-    }
-  };
-
-  const renderedIcon = icon ?? renderDefaultIcon();
-  const computedAriaLabel = ariaLabel || `Status: ${displayLabel}`;
+  let renderedIcon: React.ReactNode = null;
+  if (icon === false || icon === null) {
+    renderedIcon = null;
+  } else if (React.isValidElement(icon)) {
+    renderedIcon = icon;
+  } else if (icon === true || icon === undefined) {
+    const DefaultIconComponent = variantStyle.DefaultIcon;
+    renderedIcon = <DefaultIconComponent size={sizeStyle.iconSize} />;
+  }
 
   return (
     <span
       role="status"
       aria-label={computedAriaLabel}
+      aria-describedby={ariaDescribedBy}
       className={className}
       style={{
         display: 'inline-flex',
         alignItems: 'center',
-        gap: sizeConfig.gap,
-        padding: sizeConfig.padding,
-        borderRadius: radii.full,
-        fontFamily: typography.styles.labelCaps.fontFamily,
-        fontSize: sizeConfig.fontSize,
-        fontWeight: 600,
-        letterSpacing: '0.03em',
-        lineHeight: 1.2,
+        justifyContent: 'center',
+        gap: sizeStyle.gap,
+        padding: sizeStyle.padding,
+        fontSize: sizeStyle.fontSize,
+        fontWeight: '500',
+        fontFamily: typography.fontFamily.sans,
+        lineHeight: '1.2',
+        borderRadius: rounded.full,
+        border: `1px solid ${variantStyle.borderColor}`,
+        backgroundColor: variantStyle.backgroundColor,
+        color: variantStyle.color,
         whiteSpace: 'nowrap',
-        width: 'fit-content',
-        ...variantStyles,
         ...style,
       }}
     >
-      <span
-        style={{
-          display: 'inline-flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          flexShrink: 0,
-        }}
-        aria-hidden="true"
-      >
-        {renderedIcon}
-      </span>
-      <span>{displayLabel}</span>
+      {renderedIcon}
+      <span>{label}</span>
     </span>
   );
 };
+
+export default StatusBadge;

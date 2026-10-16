@@ -1,6 +1,15 @@
-import React, { useState, useEffect } from 'react';
-import { colors, radii, spacing, typography } from '../../lib/tokens';
-import { Task } from '../../services/crm';
+'use client';
+
+import React, { useState, useEffect, useId } from 'react';
+import { colors, rounded, spacing, typography } from '@/lib/tokens';
+import { ErrorAlert } from '@/components/shared/Alerts';
+import type {
+  TaskCreate,
+  TaskRead,
+  TaskUpdate,
+  CRMApiError,
+  FieldError,
+} from '@/services/crm';
 
 export interface CompanyOption {
   id: number;
@@ -9,588 +18,663 @@ export interface CompanyOption {
 
 export interface LeadOption {
   id: number;
-  title?: string;
-  name?: string;
-}
-
-export interface ContactOption {
-  id: number;
-  name: string;
+  title: string;
 }
 
 export interface TaskFormData {
   description: string;
-  title?: string;
   due_date: string;
   completed: boolean;
   company_id?: number | null;
   lead_id?: number | null;
-  contact_id?: number | null;
+  title?: string;
   owner?: string;
 }
 
-export interface TaskFormProps {
-  initialValues?: Partial<TaskFormData> | Task | null;
-  companies?: CompanyOption[];
-  leads?: LeadOption[];
-  contacts?: ContactOption[];
-  onSubmit: (data: TaskFormData) => void | Promise<void>;
-  onCancel?: () => void;
-  isLoading?: boolean;
-  submitLabel?: string;
-  cancelLabel?: string;
-  serverError?: string | null;
-  serverFieldErrors?: Record<string, string>;
-  className?: string;
-  style?: React.CSSProperties;
-  'data-testid'?: string;
+export interface TaskFormErrors {
+  description?: string;
+  due_date?: string;
+  completed?: string;
+  company_id?: string;
+  lead_id?: string;
+  title?: string;
+  owner?: string;
+  [key: string]: string | undefined;
 }
 
-const formatDateValue = (val?: string | Date | null): string => {
-  if (!val) return '';
-  if (typeof val === 'string') {
-    return val.split('T')[0];
-  }
-  if (val instanceof Date) {
-    return val.toISOString().split('T')[0];
-  }
-  return '';
-};
+export interface TaskFormProps {
+  /** Initial values for editing or pre-populating fields */
+  initialValues?: Partial<TaskFormData | TaskRead | TaskCreate | TaskUpdate>;
+  /** Company options for the nullable company dropdown */
+  companies?: CompanyOption[];
+  /** Lead options for the nullable lead dropdown */
+  leads?: LeadOption[];
+  /** Callback fired when form is submitted with valid data */
+  onSubmit: (data: TaskFormData) => void | Promise<void>;
+  /** Callback fired when cancel button is clicked */
+  onCancel?: () => void;
+  /** Whether the submit action is currently in progress */
+  isSubmitting?: boolean;
+  /** Alias for isSubmitting */
+  isLoading?: boolean;
+  /** API error message or error response object */
+  apiError?: string | CRMApiError | { message?: string; fields?: FieldError[] } | null;
+  /** Submit button text label */
+  submitLabel?: string;
+  /** Custom title header for the form card */
+  title?: string;
+  /** Additional CSS class name */
+  className?: string;
+  /** Inline style overrides */
+  style?: React.CSSProperties;
+}
 
-const getInitialFormData = (initialValues?: Partial<TaskFormData> | Task | null): TaskFormData => {
-  if (!initialValues) {
-    return {
-      description: '',
-      title: '',
-      due_date: '',
-      completed: false,
-      company_id: null,
-      lead_id: null,
-      contact_id: null,
-      owner: '',
-    };
-  }
-
-  const record = initialValues as Record<string, unknown>;
-
-  const desc =
-    typeof record.description === 'string'
-      ? record.description
-      : typeof record.title === 'string'
-      ? record.title
-      : typeof record.name === 'string'
-      ? record.name
-      : '';
-
-  const dueDateStr =
-    typeof record.due_date === 'string' || record.due_date instanceof Date
-      ? formatDateValue(record.due_date)
-      : '';
-
-  const completedVal =
-    typeof record.completed === 'boolean'
-      ? record.completed
-      : false;
-
-  const companyIdVal =
-    typeof record.company_id === 'number' ? record.company_id : null;
-
-  const leadIdVal =
-    typeof record.lead_id === 'number' ? record.lead_id : null;
-
-  const contactIdVal =
-    typeof record.contact_id === 'number' ? record.contact_id : null;
-
-  const ownerVal =
-    typeof record.owner === 'string' ? record.owner : '';
-
-  return {
-    description: desc,
-    title: desc,
-    due_date: dueDateStr,
-    completed: completedVal,
-    company_id: companyIdVal,
-    lead_id: leadIdVal,
-    contact_id: contactIdVal,
-    owner: ownerVal,
-  };
-};
-
+/**
+ * TaskForm Component
+ * Renders a form for creating or editing a Task entity with fields:
+ * - description (required)
+ * - due_date (required, date input; past due dates allowed per Edge Case 3)
+ * - completed (boolean checkbox)
+ * - company_id (nullable dropdown)
+ * - lead_id (nullable dropdown)
+ * - owner (optional)
+ * Includes inline validation errors satisfying FR-4, FR-12, and Edge Case 3.
+ */
 export const TaskForm: React.FC<TaskFormProps> = ({
   initialValues,
   companies = [],
   leads = [],
-  contacts = [],
   onSubmit,
   onCancel,
+  isSubmitting = false,
   isLoading = false,
-  submitLabel = 'Save Task',
-  cancelLabel = 'Cancel',
-  serverError,
-  serverFieldErrors = {},
+  apiError,
+  submitLabel,
+  title,
   className = '',
   style,
-  'data-testid': testId = 'task-form',
 }) => {
-  const [formData, setFormData] = useState<TaskFormData>(() => getInitialFormData(initialValues));
-  const [errors, setErrors] = useState<Record<string, string>>({});
-  const [, setTouched] = useState<Record<string, boolean>>({});
+  const formId = useId();
+  const descriptionInputId = `${formId}-description`;
+  const dueDateInputId = `${formId}-due-date`;
+  const completedCheckboxId = `${formId}-completed`;
+  const companySelectId = `${formId}-company-id`;
+  const leadSelectId = `${formId}-lead-id`;
+  const ownerInputId = `${formId}-owner`;
+  const titleHeaderId = `${formId}-title-header`;
 
+  const pending = isSubmitting || isLoading;
+
+  const [formData, setFormData] = useState<TaskFormData>({
+    description: initialValues?.description ?? '',
+    due_date: initialValues?.due_date ? String(initialValues.due_date).split('T')[0] : '',
+    completed: initialValues?.completed ?? false,
+    company_id: initialValues?.company_id ?? null,
+    lead_id: initialValues?.lead_id ?? null,
+    title: initialValues?.title ?? '',
+    owner: initialValues?.owner ?? '',
+  });
+
+  const [errors, setErrors] = useState<TaskFormErrors>({});
+  const [touched, setTouched] = useState<Record<string, boolean>>({});
+
+  // Synchronize form state when initialValues change
   useEffect(() => {
     if (initialValues) {
-      setFormData(getInitialFormData(initialValues));
+      setFormData({
+        description: initialValues.description ?? '',
+        due_date: initialValues.due_date ? String(initialValues.due_date).split('T')[0] : '',
+        completed: initialValues.completed ?? false,
+        company_id: initialValues.company_id ?? null,
+        lead_id: initialValues.lead_id ?? null,
+        title: initialValues.title ?? '',
+        owner: initialValues.owner ?? '',
+      });
+      setErrors({});
+      setTouched({});
     }
   }, [initialValues]);
 
-  const handleChange = <K extends keyof TaskFormData>(field: K, value: TaskFormData[K]) => {
-    setFormData((prev) => ({ ...prev, [field]: value }));
+  // Extract server-side field level validation errors if passed via apiError
+  useEffect(() => {
+    if (!apiError) return;
 
-    if (errors[field]) {
-      setErrors((prev) => {
-        const next = { ...prev };
-        delete next[field];
-        return next;
+    if (typeof apiError === 'object' && 'fields' in apiError && Array.isArray(apiError.fields)) {
+      const serverErrors: TaskFormErrors = {};
+      apiError.fields.forEach((f) => {
+        if (f.field && f.message) {
+          serverErrors[f.field] = f.message;
+        }
       });
-    }
-  };
-
-  const handleBlur = (field: keyof TaskFormData) => {
-    setTouched((prev) => ({ ...prev, [field]: true }));
-    validateField(field, formData[field]);
-  };
-
-  const validateField = (field: keyof TaskFormData, value?: unknown): string | null => {
-    let errorMsg: string | null = null;
-    if (field === 'description' || field === 'title') {
-      if (!value || typeof value !== 'string' || !value.trim()) {
-        errorMsg = 'Task description is required';
+      if (Object.keys(serverErrors).length > 0) {
+        setErrors((prev) => ({ ...prev, ...serverErrors }));
       }
-    } else if (field === 'due_date') {
-      if (!value || (typeof value === 'string' && !value.trim())) {
-        errorMsg = 'Due date is required';
-      }
-      // Edge Case 3: Setting due_date to a past date is allowed.
     }
-    return errorMsg;
+  }, [apiError]);
+
+  /**
+   * Validate individual form field
+   */
+  const validateField = (
+    field: keyof TaskFormData,
+    value: string | number | boolean | null | undefined
+  ): string | undefined => {
+    if (field === 'description') {
+      const strVal = typeof value === 'string' ? value : '';
+      if (!strVal || !strVal.trim()) {
+        return 'Task description is required';
+      }
+    }
+
+    if (field === 'due_date') {
+      const strVal = typeof value === 'string' ? value : '';
+      if (!strVal || !strVal.trim()) {
+        return 'Due date is required';
+      }
+      // Edge Case 3: Past due dates are allowed (task creates/updates in the past are valid)
+    }
+
+    return undefined;
   };
 
-  const validateForm = (): boolean => {
-    const newErrors: Record<string, string> = {};
+  /**
+   * Validate all form fields
+   */
+  const validateAll = (data: TaskFormData): TaskFormErrors => {
+    const newErrors: TaskFormErrors = {};
 
-    const descError = validateField('description', formData.description);
-    if (descError) {
-      newErrors.description = descError;
+    const descError = validateField('description', data.description);
+    if (descError) newErrors.description = descError;
+
+    const dateError = validateField('due_date', data.due_date);
+    if (dateError) newErrors.due_date = dateError;
+
+    return newErrors;
+  };
+
+  const handleChange = (
+    e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>
+  ) => {
+    const { name, value, type } = e.target;
+    const fieldName = name as keyof TaskFormData;
+
+    let updatedValue: string | number | boolean | null = value;
+    if (type === 'checkbox') {
+      updatedValue = (e.target as HTMLInputElement).checked;
+    } else if (fieldName === 'company_id') {
+      updatedValue = value === '' || value === 'null' ? null : Number(value);
+    } else if (fieldName === 'lead_id') {
+      updatedValue = value === '' || value === 'null' ? null : Number(value);
     }
 
-    const dueDateError = validateField('due_date', formData.due_date);
-    if (dueDateError) {
-      newErrors.due_date = dueDateError;
+    setFormData((prev) => ({ ...prev, [fieldName]: updatedValue }));
+
+    // Re-validate field on change if touched
+    if (touched[fieldName]) {
+      const fieldError = validateField(fieldName, updatedValue);
+      setErrors((prev) => ({
+        ...prev,
+        [fieldName]: fieldError,
+      }));
+    }
+  };
+
+  const handleBlur = (
+    e: React.FocusEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>
+  ) => {
+    const { name, value, type } = e.target;
+    const fieldName = name as keyof TaskFormData;
+
+    let updatedValue: string | number | boolean | null = value;
+    if (type === 'checkbox') {
+      updatedValue = (e.target as HTMLInputElement).checked;
+    } else if (fieldName === 'company_id') {
+      updatedValue = value === '' || value === 'null' ? null : Number(value);
+    } else if (fieldName === 'lead_id') {
+      updatedValue = value === '' || value === 'null' ? null : Number(value);
     }
 
-    setErrors(newErrors);
-    return Object.keys(newErrors).length === 0;
+    setTouched((prev) => ({ ...prev, [fieldName]: true }));
+    const fieldError = validateField(fieldName, updatedValue);
+    setErrors((prev) => ({
+      ...prev,
+      [fieldName]: fieldError,
+    }));
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
+    // Mark required fields as touched
     setTouched({
       description: true,
       due_date: true,
       completed: true,
       company_id: true,
       lead_id: true,
-      contact_id: true,
+      title: true,
       owner: true,
     });
 
-    if (!validateForm()) {
+    const validationErrors = validateAll(formData);
+    setErrors(validationErrors);
+
+    if (Object.keys(validationErrors).length > 0) {
+      if (validationErrors.description) {
+        const el = document.getElementById(descriptionInputId);
+        el?.focus();
+      } else if (validationErrors.due_date) {
+        const el = document.getElementById(dueDateInputId);
+        el?.focus();
+      }
       return;
     }
 
-    try {
-      const descTrimmed = formData.description.trim();
-      await onSubmit({
-        description: descTrimmed,
-        title: descTrimmed,
-        due_date: formData.due_date,
-        completed: Boolean(formData.completed),
-        company_id: formData.company_id ?? null,
-        lead_id: formData.lead_id ?? null,
-        contact_id: formData.contact_id ?? null,
-        owner: formData.owner?.trim() || undefined,
-      });
-    } catch {
-      // Submission error handled externally
-    }
+    const cleanedData: TaskFormData = {
+      description: formData.description.trim(),
+      due_date: formData.due_date.trim(),
+      completed: Boolean(formData.completed),
+      company_id: formData.company_id ?? null,
+      lead_id: formData.lead_id ?? null,
+      title: formData.title?.trim() || undefined,
+      owner: formData.owner?.trim() || undefined,
+    };
+
+    await onSubmit(cleanedData);
   };
 
-  const getDescriptionError = (): string | undefined => {
-    return errors.description || errors.title || serverFieldErrors.description || serverFieldErrors.title;
+  const getApiErrorMessage = (): string | null => {
+    if (!apiError) return null;
+    if (typeof apiError === 'string') return apiError;
+    if ('message' in apiError && apiError.message) return apiError.message;
+    return 'An error occurred while saving task details.';
   };
 
-  const getDueDateError = (): string | undefined => {
-    return errors.due_date || serverFieldErrors.due_date;
-  };
-
-  const descriptionError = getDescriptionError();
-  const dueDateError = getDueDateError();
+  const apiErrorMessage = getApiErrorMessage();
+  const isEditing = Boolean(initialValues && ('id' in initialValues || initialValues.description));
+  const defaultTitle = isEditing ? 'Edit Task' : 'Add New Task';
+  const displayTitle = title ?? defaultTitle;
+  const defaultSubmitLabel = isEditing ? 'Save Task' : 'Create Task';
+  const displaySubmitLabel = submitLabel ?? defaultSubmitLabel;
 
   return (
-    <form
-      data-testid={testId}
-      onSubmit={handleSubmit}
-      className={className}
-      noValidate
+    <div
+      className={`task-form-container ${className}`}
       style={{
-        display: 'flex',
-        flexDirection: 'column',
-        gap: spacing[4],
         backgroundColor: colors.surface.containerLowest,
-        borderRadius: radii.md,
-        padding: spacing[6],
-        border: `1px solid ${colors.surface.outlineVariant}`,
-        boxShadow: '0 4px 12px rgba(115, 92, 65, 0.05)',
+        border: `1px solid ${colors.borderVariant}`,
+        borderRadius: rounded.lg,
+        padding: spacing.xl,
+        maxWidth: '640px',
+        width: '100%',
+        boxShadow: '0 4px 6px -1px rgba(115, 92, 65, 0.08)',
         ...style,
       }}
     >
-      {/* Top-level Server Error */}
-      {serverError && (
-        <div
-          data-testid="task-form-server-error"
-          role="alert"
+      <div style={{ marginBottom: spacing.lg }}>
+        <h2
+          id={titleHeaderId}
           style={{
-            padding: `${spacing[3]} ${spacing[4]}`,
-            backgroundColor: colors.error.container,
-            border: `1px solid ${colors.error.main}`,
-            borderRadius: radii.sm,
-            color: colors.error.onContainer,
-            fontSize: typography.styles.caption.fontSize,
-            fontFamily: typography.fontFamilies.sans,
+            fontFamily: typography.headlineSm.fontFamily,
+            fontSize: typography.headlineSm.fontSize,
+            fontWeight: typography.headlineSm.fontWeight,
+            lineHeight: typography.headlineSm.lineHeight,
+            color: colors.onSurface,
+            margin: 0,
           }}
         >
-          {serverError}
+          {displayTitle}
+        </h2>
+      </div>
+
+      {apiErrorMessage && (
+        <div style={{ marginBottom: spacing.lg }}>
+          <ErrorAlert message={apiErrorMessage} />
         </div>
       )}
 
-      {/* Description Field (Required) */}
-      <div style={{ display: 'flex', flexDirection: 'column', gap: spacing[1] }}>
-        <label
-          htmlFor="task-description"
-          style={{
-            ...typography.styles.labelCaps,
-            color: descriptionError ? colors.error.main : colors.surface.onSurfaceVariant,
-            display: 'flex',
-            alignItems: 'center',
-            gap: spacing[1],
-          }}
-        >
-          Description
-          <span style={{ color: colors.error.main }}>*</span>
-        </label>
-        <textarea
-          id="task-description"
-          name="description"
-          rows={3}
-          disabled={isLoading}
-          value={formData.description}
-          onChange={(e) => handleChange('description', e.target.value)}
-          onBlur={() => handleBlur('description')}
-          aria-invalid={!!descriptionError}
-          aria-describedby={descriptionError ? 'task-description-error' : undefined}
-          data-testid="task-description-input"
-          placeholder="e.g. Follow up on proposal with client"
-          style={{
-            padding: `${spacing[2]} ${spacing[3]}`,
-            fontSize: typography.styles.bodyMd.fontSize,
-            fontFamily: typography.fontFamilies.sans,
-            borderRadius: radii.sm,
-            border: `1px solid ${descriptionError ? colors.error.main : colors.surface.outlineVariant}`,
-            backgroundColor: colors.surface.containerLowest,
-            color: colors.surface.onSurface,
-            outline: 'none',
-            resize: 'vertical',
-          }}
-        />
-        {descriptionError && (
-          <span
-            id="task-description-error"
-            data-testid="task-description-error"
-            role="alert"
-            style={{
-              color: colors.error.main,
-              fontSize: typography.styles.caption.fontSize,
-              fontFamily: typography.fontFamilies.sans,
-            }}
-          >
-            {descriptionError}
-          </span>
-        )}
-      </div>
-
-      {/* Due Date Field (Required) */}
-      <div style={{ display: 'flex', flexDirection: 'column', gap: spacing[1] }}>
-        <label
-          htmlFor="task-due-date"
-          style={{
-            ...typography.styles.labelCaps,
-            color: dueDateError ? colors.error.main : colors.surface.onSurfaceVariant,
-            display: 'flex',
-            alignItems: 'center',
-            gap: spacing[1],
-          }}
-        >
-          Due Date
-          <span style={{ color: colors.error.main }}>*</span>
-        </label>
-        <input
-          id="task-due-date"
-          name="due_date"
-          type="date"
-          disabled={isLoading}
-          value={formData.due_date}
-          onChange={(e) => handleChange('due_date', e.target.value)}
-          onBlur={() => handleBlur('due_date')}
-          aria-invalid={!!dueDateError}
-          aria-describedby={dueDateError ? 'task-due-date-error' : undefined}
-          data-testid="task-due-date-input"
-          style={{
-            padding: `${spacing[2]} ${spacing[3]}`,
-            fontSize: typography.styles.bodyMd.fontSize,
-            fontFamily: typography.fontFamilies.sans,
-            borderRadius: radii.sm,
-            border: `1px solid ${dueDateError ? colors.error.main : colors.surface.outlineVariant}`,
-            backgroundColor: colors.surface.containerLowest,
-            color: colors.surface.onSurface,
-            outline: 'none',
-          }}
-        />
-        {dueDateError && (
-          <span
-            id="task-due-date-error"
-            data-testid="task-due-date-error"
-            role="alert"
-            style={{
-              color: colors.error.main,
-              fontSize: typography.styles.caption.fontSize,
-              fontFamily: typography.fontFamilies.sans,
-            }}
-          >
-            {dueDateError}
-          </span>
-        )}
-      </div>
-
-      {/* Completed Checkbox */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: spacing[2], marginTop: spacing[1] }}>
-        <input
-          id="task-completed"
-          name="completed"
-          type="checkbox"
-          disabled={isLoading}
-          checked={formData.completed}
-          onChange={(e) => handleChange('completed', e.target.checked)}
-          data-testid="task-completed-checkbox"
-          style={{
-            width: '18px',
-            height: '18px',
-            accentColor: colors.accent.primary,
-            cursor: isLoading ? 'not-allowed' : 'pointer',
-          }}
-        />
-        <label
-          htmlFor="task-completed"
-          style={{
-            fontSize: typography.styles.bodyMd.fontSize,
-            fontFamily: typography.fontFamilies.sans,
-            color: colors.surface.onSurface,
-            cursor: isLoading ? 'not-allowed' : 'pointer',
-          }}
-        >
-          Mark task as completed
-        </label>
-      </div>
-
-      {/* Company Dropdown (Nullable) */}
-      <div style={{ display: 'flex', flexDirection: 'column', gap: spacing[1] }}>
-        <label
-          htmlFor="task-company"
-          style={{
-            ...typography.styles.labelCaps,
-            color: colors.surface.onSurfaceVariant,
-          }}
-        >
-          Company
-        </label>
-        <select
-          id="task-company"
-          name="company_id"
-          disabled={isLoading}
-          value={formData.company_id ?? ''}
-          onChange={(e) =>
-            handleChange('company_id', e.target.value ? Number(e.target.value) : null)
-          }
-          onBlur={() => handleBlur('company_id')}
-          data-testid="task-company-select"
-          style={{
-            padding: `${spacing[2]} ${spacing[3]}`,
-            fontSize: typography.styles.bodyMd.fontSize,
-            fontFamily: typography.fontFamilies.sans,
-            borderRadius: radii.sm,
-            border: `1px solid ${colors.surface.outlineVariant}`,
-            backgroundColor: colors.surface.containerLowest,
-            color: colors.surface.onSurface,
-            outline: 'none',
-          }}
-        >
-          <option value="">Unassigned / No company</option>
-          {companies.map((company) => (
-            <option key={company.id} value={company.id}>
-              {company.name}
-            </option>
-          ))}
-        </select>
-      </div>
-
-      {/* Lead Dropdown (Nullable) */}
-      <div style={{ display: 'flex', flexDirection: 'column', gap: spacing[1] }}>
-        <label
-          htmlFor="task-lead"
-          style={{
-            ...typography.styles.labelCaps,
-            color: colors.surface.onSurfaceVariant,
-          }}
-        >
-          Lead
-        </label>
-        <select
-          id="task-lead"
-          name="lead_id"
-          disabled={isLoading}
-          value={formData.lead_id ?? ''}
-          onChange={(e) =>
-            handleChange('lead_id', e.target.value ? Number(e.target.value) : null)
-          }
-          onBlur={() => handleBlur('lead_id')}
-          data-testid="task-lead-select"
-          style={{
-            padding: `${spacing[2]} ${spacing[3]}`,
-            fontSize: typography.styles.bodyMd.fontSize,
-            fontFamily: typography.fontFamilies.sans,
-            borderRadius: radii.sm,
-            border: `1px solid ${colors.surface.outlineVariant}`,
-            backgroundColor: colors.surface.containerLowest,
-            color: colors.surface.onSurface,
-            outline: 'none',
-          }}
-        >
-          <option value="">Unassigned / No lead</option>
-          {leads.map((lead) => (
-            <option key={lead.id} value={lead.id}>
-              {lead.title || lead.name || `Lead #${lead.id}`}
-            </option>
-          ))}
-        </select>
-      </div>
-
-      {/* Contact Dropdown (Nullable) */}
-      {contacts && contacts.length > 0 && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: spacing[1] }}>
+      <form onSubmit={handleSubmit} noValidate aria-labelledby={titleHeaderId}>
+        {/* Task Description (Required) */}
+        <div style={{ marginBottom: spacing.lg }}>
           <label
-            htmlFor="task-contact"
+            htmlFor={descriptionInputId}
             style={{
-              ...typography.styles.labelCaps,
-              color: colors.surface.onSurfaceVariant,
+              display: 'block',
+              fontFamily: typography.sizes["label-caps"].fontFamily,
+              fontSize: typography.sizes["label-caps"].fontSize,
+              fontWeight: typography.sizes["label-caps"].fontWeight,
+              letterSpacing: typography.sizes["label-caps"].letterSpacing,
+              color: colors.onSurfaceVariant,
+              textTransform: 'uppercase',
+              marginBottom: spacing.xs,
             }}
           >
-            Contact
+            Task Description <span style={{ color: colors.error }}>*</span>
+          </label>
+          <textarea
+            id={descriptionInputId}
+            name="description"
+            rows={3}
+            value={formData.description}
+            onChange={handleChange}
+            onBlur={handleBlur}
+            disabled={pending}
+            aria-required="true"
+            aria-invalid={Boolean(errors.description)}
+            aria-describedby={errors.description ? `${descriptionInputId}-error` : undefined}
+            placeholder="Enter task details or action item..."
+            style={{
+              width: '100%',
+              padding: `${spacing.sm} ${spacing.md}`,
+              fontFamily: typography.bodyMd.fontFamily,
+              fontSize: typography.bodyMd.fontSize,
+              lineHeight: typography.bodyMd.lineHeight,
+              color: colors.onSurface,
+              backgroundColor: colors.surface.containerLow,
+              border: `1px solid ${errors.description ? colors.error : colors.borderVariant}`,
+              borderRadius: rounded.sm,
+              outline: 'none',
+              boxSizing: 'border-box',
+              resize: 'vertical',
+            }}
+          />
+          {errors.description && (
+            <p
+              id={`${descriptionInputId}-error`}
+              role="alert"
+              style={{
+                fontFamily: typography.caption.fontFamily,
+                fontSize: typography.caption.fontSize,
+                color: colors.error,
+                marginTop: spacing.xs,
+                marginBottom: 0,
+              }}
+            >
+              {errors.description}
+            </p>
+          )}
+        </div>
+
+        {/* Due Date (Required) */}
+        <div style={{ marginBottom: spacing.lg }}>
+          <label
+            htmlFor={dueDateInputId}
+            style={{
+              display: 'block',
+              fontFamily: typography.sizes["label-caps"].fontFamily,
+              fontSize: typography.sizes["label-caps"].fontSize,
+              fontWeight: typography.sizes["label-caps"].fontWeight,
+              letterSpacing: typography.sizes["label-caps"].letterSpacing,
+              color: colors.onSurfaceVariant,
+              textTransform: 'uppercase',
+              marginBottom: spacing.xs,
+            }}
+          >
+            Due Date <span style={{ color: colors.error }}>*</span>
+          </label>
+          <input
+            id={dueDateInputId}
+            type="date"
+            name="due_date"
+            value={formData.due_date}
+            onChange={handleChange}
+            onBlur={handleBlur}
+            disabled={pending}
+            aria-required="true"
+            aria-invalid={Boolean(errors.due_date)}
+            aria-describedby={errors.due_date ? `${dueDateInputId}-error` : undefined}
+            style={{
+              width: '100%',
+              padding: `${spacing.sm} ${spacing.md}`,
+              fontFamily: typography.bodyMd.fontFamily,
+              fontSize: typography.bodyMd.fontSize,
+              lineHeight: typography.bodyMd.lineHeight,
+              color: colors.onSurface,
+              backgroundColor: colors.surface.containerLow,
+              border: `1px solid ${errors.due_date ? colors.error : colors.borderVariant}`,
+              borderRadius: rounded.sm,
+              outline: 'none',
+              boxSizing: 'border-box',
+            }}
+          />
+          {errors.due_date && (
+            <p
+              id={`${dueDateInputId}-error`}
+              role="alert"
+              style={{
+                fontFamily: typography.caption.fontFamily,
+                fontSize: typography.caption.fontSize,
+                color: colors.error,
+                marginTop: spacing.xs,
+                marginBottom: 0,
+              }}
+            >
+              {errors.due_date}
+            </p>
+          )}
+        </div>
+
+        {/* Completed Checkbox */}
+        <div style={{ marginBottom: spacing.lg }}>
+          <label
+            htmlFor={completedCheckboxId}
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: spacing.sm,
+              fontFamily: typography.bodyMd.fontFamily,
+              fontSize: typography.bodyMd.fontSize,
+              color: colors.onSurface,
+              cursor: pending ? 'not-allowed' : 'pointer',
+            }}
+          >
+            <input
+              id={completedCheckboxId}
+              type="checkbox"
+              name="completed"
+              checked={formData.completed}
+              onChange={handleChange}
+              onBlur={handleBlur}
+              disabled={pending}
+              style={{
+                width: '18px',
+                height: '18px',
+                accentColor: colors.primary,
+                cursor: pending ? 'not-allowed' : 'pointer',
+              }}
+            />
+            Mark as Completed
+          </label>
+        </div>
+
+        {/* Company Dropdown (Nullable) */}
+        <div style={{ marginBottom: spacing.lg }}>
+          <label
+            htmlFor={companySelectId}
+            style={{
+              display: 'block',
+              fontFamily: typography.sizes["label-caps"].fontFamily,
+              fontSize: typography.sizes["label-caps"].fontSize,
+              fontWeight: typography.sizes["label-caps"].fontWeight,
+              letterSpacing: typography.sizes["label-caps"].letterSpacing,
+              color: colors.onSurfaceVariant,
+              textTransform: 'uppercase',
+              marginBottom: spacing.xs,
+            }}
+          >
+            Company (Optional)
           </label>
           <select
-            id="task-contact"
-            name="contact_id"
-            disabled={isLoading}
-            value={formData.contact_id ?? ''}
-            onChange={(e) =>
-              handleChange('contact_id', e.target.value ? Number(e.target.value) : null)
-            }
-            onBlur={() => handleBlur('contact_id')}
-            data-testid="task-contact-select"
+            id={companySelectId}
+            name="company_id"
+            value={formData.company_id ?? ''}
+            onChange={handleChange}
+            onBlur={handleBlur}
+            disabled={pending}
             style={{
-              padding: `${spacing[2]} ${spacing[3]}`,
-              fontSize: typography.styles.bodyMd.fontSize,
-              fontFamily: typography.fontFamilies.sans,
-              borderRadius: radii.sm,
-              border: `1px solid ${colors.surface.outlineVariant}`,
-              backgroundColor: colors.surface.containerLowest,
-              color: colors.surface.onSurface,
+              width: '100%',
+              padding: `${spacing.sm} ${spacing.md}`,
+              fontFamily: typography.bodyMd.fontFamily,
+              fontSize: typography.bodyMd.fontSize,
+              lineHeight: typography.bodyMd.lineHeight,
+              color: colors.onSurface,
+              backgroundColor: colors.surface.containerLow,
+              border: `1px solid ${colors.borderVariant}`,
+              borderRadius: rounded.sm,
               outline: 'none',
+              boxSizing: 'border-box',
             }}
           >
-            <option value="">Unassigned / No contact</option>
-            {contacts.map((contact) => (
-              <option key={contact.id} value={contact.id}>
-                {contact.name}
+            <option value="">-- No Company --</option>
+            {companies.map((company) => (
+              <option key={company.id} value={company.id}>
+                {company.name}
               </option>
             ))}
           </select>
         </div>
-      )}
 
-      {/* Form Action Buttons */}
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'flex-end',
-          gap: spacing[3],
-          marginTop: spacing[2],
-        }}
-      >
-        {onCancel && (
-          <button
-            type="button"
-            onClick={onCancel}
-            disabled={isLoading}
-            data-testid="task-cancel-button"
+        {/* Lead Dropdown (Nullable) */}
+        <div style={{ marginBottom: spacing.lg }}>
+          <label
+            htmlFor={leadSelectId}
             style={{
-              padding: `${spacing[2]} ${spacing[4]}`,
-              fontSize: typography.styles.bodyMd.fontSize,
-              fontFamily: typography.fontFamilies.sans,
-              fontWeight: 500,
-              borderRadius: radii.sm,
-              border: `1px solid ${colors.surface.outlineVariant}`,
-              backgroundColor: 'transparent',
-              color: colors.surface.onSurface,
-              cursor: isLoading ? 'not-allowed' : 'pointer',
-              opacity: isLoading ? 0.6 : 1,
+              display: 'block',
+              fontFamily: typography.sizes["label-caps"].fontFamily,
+              fontSize: typography.sizes["label-caps"].fontSize,
+              fontWeight: typography.sizes["label-caps"].fontWeight,
+              letterSpacing: typography.sizes["label-caps"].letterSpacing,
+              color: colors.onSurfaceVariant,
+              textTransform: 'uppercase',
+              marginBottom: spacing.xs,
             }}
           >
-            {cancelLabel}
-          </button>
-        )}
-        <button
-          type="submit"
-          disabled={isLoading}
-          data-testid="task-submit-button"
+            Lead (Optional)
+          </label>
+          <select
+            id={leadSelectId}
+            name="lead_id"
+            value={formData.lead_id ?? ''}
+            onChange={handleChange}
+            onBlur={handleBlur}
+            disabled={pending}
+            style={{
+              width: '100%',
+              padding: `${spacing.sm} ${spacing.md}`,
+              fontFamily: typography.bodyMd.fontFamily,
+              fontSize: typography.bodyMd.fontSize,
+              lineHeight: typography.bodyMd.lineHeight,
+              color: colors.onSurface,
+              backgroundColor: colors.surface.containerLow,
+              border: `1px solid ${colors.borderVariant}`,
+              borderRadius: rounded.sm,
+              outline: 'none',
+              boxSizing: 'border-box',
+            }}
+          >
+            <option value="">-- No Lead --</option>
+            {leads.map((lead) => (
+              <option key={lead.id} value={lead.id}>
+                {lead.title}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        {/* Owner / Assigned To (Optional) */}
+        <div style={{ marginBottom: spacing.xl }}>
+          <label
+            htmlFor={ownerInputId}
+            style={{
+              display: 'block',
+              fontFamily: typography.sizes["label-caps"].fontFamily,
+              fontSize: typography.sizes["label-caps"].fontSize,
+              fontWeight: typography.sizes["label-caps"].fontWeight,
+              letterSpacing: typography.sizes["label-caps"].letterSpacing,
+              color: colors.onSurfaceVariant,
+              textTransform: 'uppercase',
+              marginBottom: spacing.xs,
+            }}
+          >
+            Owner
+          </label>
+          <input
+            id={ownerInputId}
+            type="text"
+            name="owner"
+            value={formData.owner ?? ''}
+            onChange={handleChange}
+            onBlur={handleBlur}
+            disabled={pending}
+            placeholder="Assignee name or email"
+            style={{
+              width: '100%',
+              padding: `${spacing.sm} ${spacing.md}`,
+              fontFamily: typography.bodyMd.fontFamily,
+              fontSize: typography.bodyMd.fontSize,
+              lineHeight: typography.bodyMd.lineHeight,
+              color: colors.onSurface,
+              backgroundColor: colors.surface.containerLow,
+              border: `1px solid ${colors.borderVariant}`,
+              borderRadius: rounded.sm,
+              outline: 'none',
+              boxSizing: 'border-box',
+            }}
+          />
+        </div>
+
+        {/* Action Buttons */}
+        <div
           style={{
-            padding: `${spacing[2]} ${spacing[5]}`,
-            fontSize: typography.styles.bodyMd.fontSize,
-            fontFamily: typography.fontFamilies.sans,
-            fontWeight: 500,
-            borderRadius: radii.sm,
-            border: 'none',
-            backgroundColor: colors.accent.primary,
-            color: colors.accent.onPrimary,
-            cursor: isLoading ? 'not-allowed' : 'pointer',
-            opacity: isLoading ? 0.7 : 1,
-            display: 'inline-flex',
+            display: 'flex',
             alignItems: 'center',
-            gap: spacing[2],
+            justifyContent: 'flex-end',
+            gap: spacing.md,
+            marginTop: spacing.xl,
           }}
         >
-          {isLoading ? 'Saving...' : submitLabel}
-        </button>
-      </div>
-    </form>
+          {onCancel && (
+            <button
+              type="button"
+              onClick={onCancel}
+              disabled={pending}
+              style={{
+                padding: `${spacing.sm} ${spacing.lg}`,
+                fontFamily: typography.bodyMd.fontFamily,
+                fontSize: typography.bodyMd.fontSize,
+                fontWeight: 500,
+                color: colors.onSurface,
+                backgroundColor: colors.surface.containerHigh,
+                border: `1px solid ${colors.borderVariant}`,
+                borderRadius: rounded.sm,
+                cursor: pending ? 'not-allowed' : 'pointer',
+                opacity: pending ? 0.6 : 1,
+              }}
+            >
+              Cancel
+            </button>
+          )}
+
+          <button
+            type="submit"
+            disabled={pending}
+            style={{
+              padding: `${spacing.sm} ${spacing.xl}`,
+              fontFamily: typography.bodyMd.fontFamily,
+              fontSize: typography.bodyMd.fontSize,
+              fontWeight: 500,
+              color: colors.onPrimary,
+              backgroundColor: colors.primary,
+              border: 'none',
+              borderRadius: rounded.sm,
+              cursor: pending ? 'not-allowed' : 'pointer',
+              opacity: pending ? 0.6 : 1,
+            }}
+          >
+            {pending ? 'Saving...' : displaySubmitLabel}
+          </button>
+        </div>
+      </form>
+    </div>
   );
 };

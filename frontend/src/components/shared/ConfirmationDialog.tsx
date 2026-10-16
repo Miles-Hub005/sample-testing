@@ -1,189 +1,258 @@
-import React, { useEffect, useId, useRef } from 'react';
-import { colors, radii, shadows, spacing, typography } from '../../lib/tokens';
+'use client';
 
-export type ConfirmationDialogVariant = 'primary' | 'danger' | 'warning';
+import React, { useEffect, useRef, useId } from 'react';
+import { colors, rounded, shadows, spacing, typography } from '@/lib/tokens';
+
+export type ConfirmationVariant = 'danger' | 'primary' | 'accent' | 'warning';
 
 export interface ConfirmationDialogProps {
-  /** Controls visibility of the modal dialog */
+  /**
+   * Controls whether the dialog modal is open and visible.
+   */
   isOpen: boolean;
-  /** Dialog title text or node. Defaults to 'Confirm Action'. */
+  /**
+   * Dialog header/title text or node.
+   * Default: "Confirm Action"
+   */
   title?: React.ReactNode;
-  /** Primary body message or prompt text explaining the action */
+  /**
+   * Dialog message/description text or node.
+   * Default: "Are you sure you want to proceed?"
+   */
   message?: React.ReactNode;
-  /** Optional additional child elements rendered inside the body */
+  /**
+   * Additional body content rendered inside the dialog panel.
+   */
   children?: React.ReactNode;
-  /** Label for the confirmation button. Defaults to 'Confirm'. */
+  /**
+   * Label text for the confirm action button.
+   * Default: "Confirm"
+   */
   confirmLabel?: string;
-  /** Label for the cancel button. Defaults to 'Cancel'. */
+  /**
+   * Label text for the cancel button.
+   * Default: "Cancel"
+   */
   cancelLabel?: string;
-  /** Callback function executed when user clicks the Confirm button */
-  onConfirm: () => void | Promise<void>;
-  /** Callback function executed when user clicks Cancel, clicks backdrop, or presses Escape */
+
+  isConfirming?: boolean;
+  /**
+   * Visual variant for the confirm button.
+   * Options: 'danger' | 'primary' | 'accent' | 'warning'
+   * Default: 'danger'
+   */
+  confirmVariant?: ConfirmationVariant;
+  /**
+   * Callback fired when user clicks the confirm button.
+   */
+  onConfirm: () => void;
+  /**
+   * Callback fired when user clicks cancel, backdrop overlay, or presses Escape.
+   */
   onCancel: () => void;
-  /** Visual theme for confirm button. 'danger' is recommended for destructive actions (e.g. deletion). Defaults to 'primary'. */
-  variant?: ConfirmationDialogVariant;
-  /** Shortcut boolean for variant="danger" */
-  isDanger?: boolean;
-  /** Disables action buttons and displays a loading state on the confirm button */
+  /**
+   * Whether the confirmation action is currently pending/submitting.
+   * Disables interactive controls and shows loading indicator on confirm button.
+   */
   isLoading?: boolean;
-  /** Whether clicking the dark backdrop overlay triggers onCancel. Defaults to true. */
-  closeOnBackdropClick?: boolean;
-  /** Whether pressing the Escape key triggers onCancel. Defaults to true. */
-  closeOnEscape?: boolean;
-  /** Modal accessibility role. Defaults to 'alertdialog' if danger/warning variant, else 'dialog'. */
-  role?: 'dialog' | 'alertdialog';
-  /** Custom aria-label override if title is not a simple string */
+  /**
+   * Accessible aria-label override for the dialog container.
+   */
   ariaLabel?: string;
-  /** Custom element ID for aria-labelledby anchor */
-  titleId?: string;
-  /** Custom element ID for aria-describedby anchor */
-  descriptionId?: string;
-  /** Additional CSS class for the dialog card container */
+  /**
+   * Accessible aria-describedby attribute or ID override.
+   */
+  ariaDescribedBy?: string;
+  /**
+   * Whether clicking the backdrop overlay triggers cancel.
+   * Default: true
+   */
+  closeOnOverlayClick?: boolean;
+  /**
+   * Accessible ARIA role for the modal container ('dialog' | 'alertdialog').
+   * Default: 'alertdialog' for 'danger' variant, otherwise 'dialog'.
+   */
+  role?: 'dialog' | 'alertdialog';
+  /**
+   * Additional CSS class name for the dialog container.
+   */
   className?: string;
-  /** Inline style overrides for the dialog card container */
+  /**
+   * Custom inline styles for the dialog container panel.
+   */
   style?: React.CSSProperties;
 }
 
 /**
- * ConfirmationDialog component
- *
- * Provides a modal dialog window with backdrop, Cancel/Confirm action buttons,
- * and standard accessibility attributes (role="dialog" / role="alertdialog",
- * aria-modal="true", focus management, and Escape key handling).
+ * ConfirmationDialog component provides an accessible modal confirmation prompt.
+ * Features:
+ * - Fixed background backdrop overlay blocking background interaction
+ * - Modal keyboard accessibility (Escape key to cancel, focus trapping)
+ * - Semantic ARIA role (dialog/alertdialog), aria-modal="true", aria-labelledby, aria-describedby
+ * - Cancel and Confirm actions with configurable labels and visual variants
+ * - Styled using Linen & Logic design system tokens
  */
 export const ConfirmationDialog: React.FC<ConfirmationDialogProps> = ({
   isOpen,
   title = 'Confirm Action',
-  message,
+  message = 'Are you sure you want to proceed?',
   children,
   confirmLabel = 'Confirm',
   cancelLabel = 'Cancel',
+  confirmVariant = 'danger',
   onConfirm,
   onCancel,
-  variant = 'primary',
-  isDanger = false,
   isLoading = false,
-  closeOnBackdropClick = true,
-  closeOnEscape = true,
-  role,
   ariaLabel,
-  titleId,
-  descriptionId,
-  className,
+  ariaDescribedBy,
+  closeOnOverlayClick = true,
+  role,
+  className = '',
   style,
 }) => {
-  const generatedId = useId();
+  const dialogRef = useRef<HTMLDivElement>(null);
   const cancelButtonRef = useRef<HTMLButtonElement>(null);
   const confirmButtonRef = useRef<HTMLButtonElement>(null);
 
-  const resolvedVariant: ConfirmationDialogVariant = isDanger ? 'danger' : variant;
-  const resolvedRole = role || (resolvedVariant === 'danger' || resolvedVariant === 'warning' ? 'alertdialog' : 'dialog');
+  const generatedId = useId();
+  const titleId = `confirmation-dialog-title-${generatedId}`;
+  const descriptionId = `confirmation-dialog-desc-${generatedId}`;
 
-  const resolvedTitleId = titleId || `confirmation-dialog-title-${generatedId}`;
-  const resolvedDescriptionId = descriptionId || `confirmation-dialog-desc-${generatedId}`;
+  // Accessible role selection
+  const computedRole = role || (confirmVariant === 'danger' ? 'alertdialog' : 'dialog');
 
-  // Focus cancel button or confirm button on mount/open
+  // Handle focus auto-focus and trapping
   useEffect(() => {
-    if (isOpen) {
-      // Small timeout ensures element is mounted in DOM
-      const timer = setTimeout(() => {
-        if (cancelButtonRef.current) {
-          cancelButtonRef.current.focus();
-        } else if (confirmButtonRef.current) {
-          confirmButtonRef.current.focus();
-        }
-      }, 0);
-      return () => clearTimeout(timer);
+    if (!isOpen) return;
+
+    // Save previously focused element to restore on close
+    const previousActiveElement =
+      typeof document !== 'undefined' ? (document.activeElement as HTMLElement | null) : null;
+
+    // Focus cancel button by default for safety, or dialog panel
+    if (cancelButtonRef.current) {
+      cancelButtonRef.current.focus();
+    } else if (dialogRef.current) {
+      dialogRef.current.focus();
     }
-  }, [isOpen]);
 
-  // Handle Escape key press
-  useEffect(() => {
-    if (!isOpen || !closeOnEscape) return;
+    // Lock body scrolling when modal is open
+    const originalOverflow = typeof document !== 'undefined' ? document.body.style.overflow : '';
+    if (typeof document !== 'undefined') {
+      document.body.style.overflow = 'hidden';
+    }
 
+    // Keydown handler for Escape key and Focus Trapping
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape' && !isLoading) {
+      if (event.key === 'Escape' || event.key === 'Esc') {
         event.preventDefault();
-        onCancel();
+        if (!isLoading) {
+          onCancel();
+        }
+        return;
+      }
+
+      if (event.key === 'Tab' && dialogRef.current) {
+        const focusableElements = dialogRef.current.querySelectorAll<HTMLElement>(
+          'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+        );
+
+        if (focusableElements.length === 0) return;
+
+        const firstElement = focusableElements[0];
+        const lastElement = focusableElements[focusableElements.length - 1];
+
+        if (event.shiftKey) {
+          if (document.activeElement === firstElement) {
+            event.preventDefault();
+            lastElement.focus();
+          }
+        } else {
+          if (document.activeElement === lastElement) {
+            event.preventDefault();
+            firstElement.focus();
+          }
+        }
       }
     };
 
-    window.addEventListener('keydown', handleKeyDown);
-    return () => {
-      window.removeEventListener('keydown', handleKeyDown);
-    };
-  }, [isOpen, closeOnEscape, isLoading, onCancel]);
-
-  // Prevent background body scroll when open
-  useEffect(() => {
-    if (isOpen) {
-      const originalOverflow = document.body.style.overflow;
-      document.body.style.overflow = 'hidden';
-      return () => {
-        document.body.style.overflow = originalOverflow;
-      };
+    if (typeof window !== 'undefined') {
+      window.addEventListener('keydown', handleKeyDown);
     }
-  }, [isOpen]);
+
+    return () => {
+      if (typeof window !== 'undefined') {
+        window.removeEventListener('keydown', handleKeyDown);
+      }
+      if (typeof document !== 'undefined') {
+        document.body.style.overflow = originalOverflow;
+      }
+      if (previousActiveElement && typeof previousActiveElement.focus === 'function') {
+        previousActiveElement.focus();
+      }
+    };
+  }, [isOpen, isLoading, onCancel]);
 
   if (!isOpen) {
     return null;
   }
 
-  const handleBackdropClick = (e: React.MouseEvent<HTMLDivElement>) => {
-    if (e.target === e.currentTarget && closeOnBackdropClick && !isLoading) {
-      onCancel();
-    }
-  };
-
+  // Visual button styling per confirmVariant
   const getConfirmButtonStyles = (): React.CSSProperties => {
-    let bg = colors.accent.primary;
-    let hoverBg = colors.accent.hover;
+    let backgroundColor: string;
+    let color: string;
 
-    if (resolvedVariant === 'danger') {
-      bg = colors.secondary.main; // Sun-faded red / secondary
-      hoverBg = colors.secondary.onContainer;
-    } else if (resolvedVariant === 'warning') {
-      bg = colors.warning.main;
-      hoverBg = colors.warning.onContainer;
+    switch (confirmVariant) {
+      case 'danger':
+        backgroundColor = colors.error;
+        color = colors.surface.containerLowest;
+        break;
+      case 'warning':
+        backgroundColor = colors.warning;
+        color = colors.surface.containerLowest;
+        break;
+      case 'primary':
+      case 'accent':
+      default:
+        backgroundColor = colors.accent.DEFAULT;
+        color = colors.accent.onAccent;
+        break;
     }
 
     return {
-      backgroundColor: bg,
-      color: '#ffffff',
+      backgroundColor,
+      color,
       border: 'none',
-      borderRadius: radii.md,
-      padding: `${spacing[2]} ${spacing[4]}`,
-      fontFamily: typography.styles.labelCaps.fontFamily,
-      fontSize: typography.styles.bodyMd.fontSize,
-      fontWeight: '600',
+      borderRadius: rounded.DEFAULT,
+      padding: `${spacing.sm} ${spacing.lg}`,
+      fontSize: typography.sizes['body-sm'].fontSize,
+      fontFamily: typography.fontFamily.sans,
+      fontWeight: '500',
       cursor: isLoading ? 'not-allowed' : 'pointer',
       opacity: isLoading ? 0.7 : 1,
       display: 'inline-flex',
       alignItems: 'center',
       justifyContent: 'center',
-      gap: spacing[2],
-      transition: 'background-color 0.15s ease, opacity 0.15s ease',
+      gap: spacing.xs,
+      transition: 'background-color 150ms ease, opacity 150ms ease',
+      outline: 'none',
     };
   };
 
-  const cancelBtnStyle: React.CSSProperties = {
-    backgroundColor: colors.surface.containerLow,
-    color: colors.surface.onSurface,
-    border: `1px solid ${colors.surface.outlineVariant}`,
-    borderRadius: radii.md,
-    padding: `${spacing[2]} ${spacing[4]}`,
-    fontFamily: typography.styles.bodyMd.fontFamily,
-    fontSize: typography.styles.bodyMd.fontSize,
-    fontWeight: '500',
-    cursor: isLoading ? 'not-allowed' : 'pointer',
-    opacity: isLoading ? 0.6 : 1,
-    transition: 'background-color 0.15s ease, border-color 0.15s ease',
+  const handleBackdropClick = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (e.target === e.currentTarget && closeOnOverlayClick && !isLoading) {
+      onCancel();
+    }
   };
+
+  const effectiveDescribedBy =
+    ariaDescribedBy || (message || children ? descriptionId : undefined);
 
   return (
     <div
       data-testid="confirmation-dialog-backdrop"
       onClick={handleBackdropClick}
+      aria-hidden="false"
       style={{
         position: 'fixed',
         top: 0,
@@ -193,90 +262,102 @@ export const ConfirmationDialog: React.FC<ConfirmationDialogProps> = ({
         width: '100vw',
         height: '100vh',
         backgroundColor: 'rgba(27, 28, 25, 0.5)',
+        backdropFilter: 'blur(2px)',
+        zIndex: 1000,
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
-        zIndex: 1000,
-        padding: spacing[4],
+        padding: spacing.gutter,
         boxSizing: 'border-box',
       }}
     >
       <div
-        role={resolvedRole}
+        ref={dialogRef}
+        role={computedRole}
         aria-modal="true"
-        aria-labelledby={resolvedTitleId}
-        aria-describedby={message || children ? resolvedDescriptionId : undefined}
         aria-label={ariaLabel}
+        aria-labelledby={ariaLabel ? undefined : title ? titleId : undefined}
+        aria-describedby={effectiveDescribedBy}
+        tabIndex={-1}
         className={className}
-        data-testid="confirmation-dialog"
         style={{
-          backgroundColor: colors.surface.containerLowest,
-          borderRadius: radii.lg,
-          boxShadow: shadows.lifted,
-          border: `1px solid ${colors.surface.outlineVariant}`,
-          padding: spacing[6],
-          maxWidth: '480px',
           width: '100%',
+          maxWidth: '480px',
+          backgroundColor: colors.surface.containerLowest,
+          borderRadius: rounded.lg,
+          boxShadow: shadows.ambient,
+          border: `1px solid ${colors.borderVariant}`,
+          padding: spacing.xl,
+          boxSizing: 'border-box',
+          outline: 'none',
           display: 'flex',
           flexDirection: 'column',
-          gap: spacing[4],
-          boxSizing: 'border-box',
+          gap: spacing.lg,
+          position: 'relative',
           ...style,
         }}
-        onClick={(e) => e.stopPropagation()}
       >
         {/* Header / Title */}
         {title && (
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-            <h2
-              id={resolvedTitleId}
-              style={{
-                margin: 0,
-                fontFamily: typography.styles.headlineSm.fontFamily,
-                fontSize: typography.styles.headlineSm.fontSize,
-                fontWeight: typography.styles.headlineSm.fontWeight,
-                color: resolvedVariant === 'danger' ? colors.secondary.main : colors.surface.onSurface,
-                lineHeight: typography.styles.headlineSm.lineHeight,
-              }}
-            >
-              {title}
-            </h2>
+          <div
+            id={titleId}
+            style={{
+              fontFamily: typography.fontFamily.serif,
+              fontSize: typography.sizes['headline-sm'].fontSize,
+              fontWeight: typography.sizes['headline-sm'].fontWeight,
+              lineHeight: typography.sizes['headline-sm'].lineHeight,
+              color: colors.surface.onSurface,
+            }}
+          >
+            {title}
           </div>
         )}
 
-        {/* Content / Message */}
+        {/* Content Body / Description */}
         {(message || children) && (
           <div
-            id={resolvedDescriptionId}
+            id={descriptionId}
             style={{
-              fontFamily: typography.styles.bodyMd.fontFamily,
-              fontSize: typography.styles.bodyMd.fontSize,
-              lineHeight: typography.styles.bodyMd.lineHeight,
+              fontFamily: typography.fontFamily.sans,
+              fontSize: typography.sizes['body-md'].fontSize,
+              lineHeight: typography.sizes['body-md'].lineHeight,
               color: colors.surface.onSurfaceVariant,
             }}
           >
-            {message && <p style={{ margin: 0 }}>{message}</p>}
+            {message}
             {children}
           </div>
         )}
 
-        {/* Actions Footer */}
+        {/* Action Controls Footer */}
         <div
           style={{
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'flex-end',
-            gap: spacing[3],
-            marginTop: spacing[2],
+            gap: spacing.md,
+            marginTop: spacing.xs,
           }}
         >
           <button
             ref={cancelButtonRef}
             type="button"
-            data-testid="confirmation-dialog-cancel"
             onClick={onCancel}
             disabled={isLoading}
-            style={cancelBtnStyle}
+            style={{
+              backgroundColor: colors.surface.containerLow,
+              color: colors.surface.onSurface,
+              border: `1px solid ${colors.borderVariant}`,
+              borderRadius: rounded.DEFAULT,
+              padding: `${spacing.sm} ${spacing.lg}`,
+              fontSize: typography.sizes['body-sm'].fontSize,
+              fontFamily: typography.fontFamily.sans,
+              fontWeight: '500',
+              cursor: isLoading ? 'not-allowed' : 'pointer',
+              opacity: isLoading ? 0.6 : 1,
+              outline: 'none',
+              transition: 'background-color 150ms ease, opacity 150ms ease',
+            }}
           >
             {cancelLabel}
           </button>
@@ -284,27 +365,24 @@ export const ConfirmationDialog: React.FC<ConfirmationDialogProps> = ({
           <button
             ref={confirmButtonRef}
             type="button"
-            data-testid="confirmation-dialog-confirm"
             onClick={onConfirm}
             disabled={isLoading}
             style={getConfirmButtonStyles()}
           >
             {isLoading && (
-              <svg
+              <span
+                data-testid="confirmation-loading-spinner"
                 aria-hidden="true"
-                data-testid="confirmation-dialog-spinner"
-                width="16"
-                height="16"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2.5"
                 style={{
+                  display: 'inline-block',
+                  width: '12px',
+                  height: '12px',
+                  border: '2px solid currentColor',
+                  borderTopColor: 'transparent',
+                  borderRadius: '50%',
                   animation: 'spin 1s linear infinite',
                 }}
-              >
-                <circle cx="12" cy="12" r="10" strokeDasharray="32" strokeDashoffset="10" />
-              </svg>
+              />
             )}
             {confirmLabel}
           </button>

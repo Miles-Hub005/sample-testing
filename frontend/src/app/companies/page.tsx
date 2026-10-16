@@ -1,400 +1,242 @@
 'use client';
 
 import React, { useState, useEffect, useCallback } from 'react';
-import Link from 'next/link';
-import { colors, radii, shadows, spacing, typography } from '../../lib/tokens';
+import { colors, rounded, shadows, spacing, typography } from '@/lib/tokens';
+import { formatDate } from '@/lib/format';
+import { DataTable, Column } from '@/components/crm/DataTable';
+import { CompanyForm, CompanyFormData } from '@/components/crm/CompanyForm';
+import { ConfirmationDialog } from '@/components/shared/ConfirmationDialog';
+import { ErrorAlert, SuccessAlert } from '@/components/shared/Alerts';
+import { LoadingState } from '@/components/shared/States';
 import {
-  companiesApi,
-  Company,
-  CompanyCreate,
-  CompanyUpdate,
-  CompanyQueryParams,
-} from '../../services/crm';
-import { DataTable, DataTableColumn } from '../../components/crm/DataTable';
-import { CompanyForm, CompanyFormData } from '../../components/crm/CompanyForm';
-import { ConfirmationDialog } from '../../components/shared/ConfirmationDialog';
-import { Alert } from '../../components/shared/Alerts';
-import { StatusBadge } from '../../components/shared/StatusBadge';
-import { formatDate } from '../../lib/format';
+  getPaginatedCompanies,
+  getCompanyDetail,
+  createCompany,
+  updateCompany,
+  deleteCompany,
+  CompanyRead,
+  CompanyDetailRead,
+  CRMApiError,
+} from '@/services/crm';
 
-export interface CompanyDetailResponse extends Company {
-  contacts?: Array<{
-    id: number;
-    name: string;
-    email: string;
-    phone?: string | null;
-    role?: string | null;
-    owner?: string | null;
-  }>;
-  leads?: Array<{
-    id: number;
-    title: string;
-    value: number;
-    status: string;
-    expected_close_date?: string | null;
-  }>;
-  tasks?: Array<{
-    id: number;
-    description: string;
-    due_date: string;
-    completed: boolean;
-  }>;
-  interactions?: Array<{
-    id: number;
-    date: string;
-    type: string;
-    summary: string;
-  }>;
-}
-
-interface ModalProps {
-  isOpen: boolean;
-  onClose: () => void;
-  title: string;
-  children: React.ReactNode;
-  maxWidth?: string;
-  'data-testid'?: string;
-}
-
-const Modal: React.FC<ModalProps> = ({
-  isOpen,
-  onClose,
-  title,
-  children,
-  maxWidth = '640px',
-  'data-testid': testId = 'modal',
-}) => {
-  useEffect(() => {
-    if (!isOpen) return;
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        onClose();
-      }
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isOpen, onClose]);
-
-  useEffect(() => {
-    if (isOpen) {
-      const originalOverflow = document.body.style.overflow;
-      document.body.style.overflow = 'hidden';
-      return () => {
-        document.body.style.overflow = originalOverflow;
-      };
-    }
-  }, [isOpen]);
-
-  if (!isOpen) return null;
-
-  return (
-    <div
-      data-testid={testId}
-      onClick={(e) => {
-        if (e.target === e.currentTarget) onClose();
-      }}
-      style={{
-        position: 'fixed',
-        top: 0,
-        left: 0,
-        right: 0,
-        bottom: 0,
-        width: '100vw',
-        height: '100vh',
-        backgroundColor: 'rgba(27, 28, 25, 0.5)',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        zIndex: 1000,
-        padding: spacing[4],
-      }}
-    >
-      <div
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="modal-title"
-        style={{
-          backgroundColor: colors.surface.containerLowest,
-          borderRadius: radii.lg,
-          boxShadow: shadows.lifted,
-          border: `1px solid ${colors.surface.outlineVariant}`,
-          width: '100%',
-          maxWidth,
-          maxHeight: '90vh',
-          display: 'flex',
-          flexDirection: 'column',
-          overflow: 'hidden',
-        }}
-      >
-        <header
-          style={{
-            padding: `${spacing[4]} ${spacing[6]}`,
-            borderBottom: `1px solid ${colors.surface.outlineVariant}`,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-          }}
-        >
-          <h2
-            id="modal-title"
-            style={{
-              fontFamily: typography.styles.headlineSm.fontFamily,
-              fontSize: typography.styles.headlineSm.fontSize,
-              fontWeight: typography.styles.headlineSm.fontWeight,
-              color: colors.surface.onSurface,
-              margin: 0,
-            }}
-          >
-            {title}
-          </h2>
-          <button
-            onClick={onClose}
-            aria-label="Close modal"
-            style={{
-              background: 'none',
-              border: 'none',
-              fontSize: '18px',
-              fontWeight: 'bold',
-              color: colors.surface.onSurfaceVariant,
-              cursor: 'pointer',
-              padding: spacing[1],
-              lineHeight: 1,
-            }}
-          >
-            ✕
-          </button>
-        </header>
-        <div
-          style={{
-            padding: spacing[6],
-            overflowY: 'auto',
-            flex: 1,
-          }}
-        >
-          {children}
-        </div>
-      </div>
-    </div>
-  );
-};
-
+/**
+ * CompaniesPage Component
+ * Route segment for `/companies`
+ * Displays a DataTable of companies with search, sort, and pagination.
+ * Offers Add Company, Detail View, Edit Company, and Delete Company modals.
+ * Satisfies FR-1 (Companies CRUD), FR-10 (Breadcrumbs/Navigation), and FR-14 (Empty States).
+ */
 export default function CompaniesPage() {
-  const [companies, setCompanies] = useState<Company[]>([]);
-  const [totalItems, setTotalItems] = useState(0);
-  const [page, setPage] = useState(1);
-  const [pageSize] = useState(20);
-  const [sortBy, setSortBy] = useState('name');
-  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
-  const [searchQuery, setSearchQuery] = useState('');
-  const [isLoading, setIsLoading] = useState(true);
-  const [pageError, setPageError] = useState<string | null>(null);
+  // Data state
+  const [companies, setCompanies] = useState<CompanyRead[]>([]);
+  const [totalItems, setTotalItems] = useState<number>(0);
+  const [page, setPage] = useState<number>(1);
+  const [pageSize, setPageSize] = useState<number>(20);
+  const [searchValue, setSearchValue] = useState<string>('');
+  const [sortColumn, setSortColumn] = useState<string>('name');
+  const [sortDirection, setSortDirection] = useState<'asc' | 'desc' | null>('asc');
+
+  // Loading & error states
+  const [loading, setLoading] = useState<boolean>(true);
+  const [error, setError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
-  // Modal States
-  const [isAddModalOpen, setIsAddModalOpen] = useState(false);
-  const [editingCompany, setEditingCompany] = useState<Company | null>(null);
-  const [viewingCompany, setViewingCompany] = useState<CompanyDetailResponse | null>(null);
-  const [isDetailLoading, setIsDetailLoading] = useState(false);
-  const [activeDetailTab, setActiveDetailTab] = useState<'overview' | 'contacts' | 'leads' | 'tasks' | 'interactions'>('overview');
+  // Modal & Selection states
+  const [isAddModalOpen, setIsAddModalOpen] = useState<boolean>(false);
+  const [isEditModalOpen, setIsEditModalOpen] = useState<boolean>(false);
+  const [isDetailModalOpen, setIsDetailModalOpen] = useState<boolean>(false);
+  const [isDeleteModalOpen, setIsDeleteModalOpen] = useState<boolean>(false);
 
-  // Deletion state
-  const [deletingCompany, setDeletingCompany] = useState<Company | null>(null);
-  const [deleteError, setDeleteError] = useState<string | null>(null);
-  const [isDeleting, setIsDeleting] = useState(false);
+  const [selectedCompany, setSelectedCompany] = useState<CompanyRead | null>(null);
+  const [companyDetail, setCompanyDetail] = useState<CompanyDetailRead | null>(null);
 
-  // Form submission state
-  const [isSubmitting, setIsSubmitting] = useState(false);
-  const [formServerError, setFormServerError] = useState<string | null>(null);
-  const [formFieldErrors, setFormFieldErrors] = useState<Record<string, string>>({});
+  const [isDetailLoading, setIsDetailLoading] = useState<boolean>(false);
+  const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
+  const [isDeleting, setIsDeleting] = useState<boolean>(false);
+  const [formApiError, setFormApiError] = useState<CRMApiError | string | null>(null);
 
+  // Fetch paginated companies list
   const fetchCompanies = useCallback(async () => {
-    setIsLoading(true);
-    setPageError(null);
+    setLoading(true);
+    setError(null);
     try {
-      const params: CompanyQueryParams = {
+      const sortParam = sortColumn
+        ? sortDirection === 'desc'
+          ? `-${sortColumn}`
+          : sortColumn
+        : undefined;
+
+      const response = await getPaginatedCompanies({
         page,
         page_size: pageSize,
-        sort_by: sortBy,
-        order: sortOrder,
-      };
-      if (searchQuery.trim()) {
-        params.search = searchQuery.trim();
-      }
+        search: searchValue || undefined,
+        sort: sortParam,
+      });
 
-      const response = await companiesApi.list(params);
-      if (response.error) {
-        setPageError(typeof response.error === 'string' ? response.error : 'Failed to load companies');
-        setCompanies([]);
-        setTotalItems(0);
-      } else if (response.data) {
-        if ('items' in response.data && Array.isArray(response.data.items)) {
-          setCompanies(response.data.items);
-          setTotalItems(response.data.total ?? response.data.items.length);
-        } else if (Array.isArray(response.data)) {
-          setCompanies(response.data);
-          setTotalItems(response.data.length);
-        }
+      setCompanies(response.items || []);
+      setTotalItems(response.total ?? (response.items ? response.items.length : 0));
+    } catch (err: unknown) {
+      if (err instanceof CRMApiError) {
+        setError(err.message);
+      } else if (err instanceof Error) {
+        setError(err.message);
+      } else {
+        setError('Failed to load companies.');
       }
-    } catch (err) {
-      setPageError(err instanceof Error ? err.message : 'An unexpected error occurred while loading companies.');
     } finally {
-      setIsLoading(false);
+      setLoading(false);
     }
-  }, [page, pageSize, sortBy, sortOrder, searchQuery]);
+  }, [page, pageSize, searchValue, sortColumn, sortDirection]);
 
   useEffect(() => {
     fetchCompanies();
   }, [fetchCompanies]);
 
-  const handleViewCompany = async (company: Company) => {
+  // Modal control helpers
+  const handleOpenAddModal = () => {
+    setFormApiError(null);
+    setIsAddModalOpen(true);
+  };
+
+  const handleCloseAddModal = () => {
+    setIsAddModalOpen(false);
+    setFormApiError(null);
+  };
+
+  const handleOpenEditModal = (company: CompanyRead) => {
+    setSelectedCompany(company);
+    setFormApiError(null);
+    setIsEditModalOpen(true);
+  };
+
+  const handleCloseEditModal = () => {
+    setIsEditModalOpen(false);
+    setSelectedCompany(null);
+    setFormApiError(null);
+  };
+
+  const handleOpenDetailModal = async (company: CompanyRead) => {
+    setSelectedCompany(company);
+    setCompanyDetail(null);
+    setIsDetailModalOpen(true);
     setIsDetailLoading(true);
-    setViewingCompany({ ...company });
-    setActiveDetailTab('overview');
+
     try {
-      const res = await companiesApi.get(company.id);
-      if (res.data) {
-        setViewingCompany(res.data as CompanyDetailResponse);
-      }
-    } catch (err) {
-      // Retain basic company data if detail fetch fails
+      const detail = await getCompanyDetail(company.id);
+      setCompanyDetail(detail);
+    } catch {
+      // If fetching detail fails, fallback to basic CompanyRead
     } finally {
       setIsDetailLoading(false);
     }
   };
 
-  const handleCreateSubmit = async (formData: CompanyFormData) => {
-    setIsSubmitting(true);
-    setFormServerError(null);
-    setFormFieldErrors({});
-    try {
-      const payload: CompanyCreate = {
-        name: formData.name,
-        industry: formData.industry || null,
-        website: formData.website || null,
-        notes: formData.notes || null,
-        email: formData.email || null,
-        owner: formData.owner || '',
-      };
-      const res = await companiesApi.create(payload);
-      if (res.error) {
-        const errData = res.error as any;
-        if (errData?.fields && Array.isArray(errData.fields)) {
-          const fieldErrMap: Record<string, string> = {};
-          errData.fields.forEach((f: { field: string; message: string }) => {
-            fieldErrMap[f.field] = f.message;
-          });
-          setFormFieldErrors(fieldErrMap);
-        }
-        setFormServerError(errData?.message || 'Failed to create company.');
-      } else if (res.data) {
-        setIsAddModalOpen(false);
-        setSuccessMessage(`Company "${res.data.name}" created successfully.`);
-        fetchCompanies();
-      }
-    } catch (err) {
-      setFormServerError(err instanceof Error ? err.message : 'Failed to create company.');
-    } finally {
-      setIsSubmitting(false);
-    }
+  const handleCloseDetailModal = () => {
+    setIsDetailModalOpen(false);
+    setSelectedCompany(null);
+    setCompanyDetail(null);
   };
 
-  const handleUpdateSubmit = async (formData: CompanyFormData) => {
-    if (!editingCompany) return;
-    setIsSubmitting(true);
-    setFormServerError(null);
-    setFormFieldErrors({});
-    try {
-      const payload: CompanyUpdate = {
-        name: formData.name,
-        industry: formData.industry || null,
-        website: formData.website || null,
-        notes: formData.notes || null,
-        email: formData.email || null,
-        owner: formData.owner || null,
-      };
-      const res = await companiesApi.update(editingCompany.id, payload);
-      if (res.error) {
-        const errData = res.error as any;
-        if (errData?.fields && Array.isArray(errData.fields)) {
-          const fieldErrMap: Record<string, string> = {};
-          errData.fields.forEach((f: { field: string; message: string }) => {
-            fieldErrMap[f.field] = f.message;
-          });
-          setFormFieldErrors(fieldErrMap);
-        }
-        setFormServerError(errData?.message || 'Failed to update company.');
-      } else if (res.data) {
-        setEditingCompany(null);
-        setSuccessMessage(`Company "${res.data.name}" updated successfully.`);
-        fetchCompanies();
-        if (viewingCompany && viewingCompany.id === res.data.id) {
-          handleViewCompany(res.data);
-        }
-      }
-    } catch (err) {
-      setFormServerError(err instanceof Error ? err.message : 'Failed to update company.');
-    } finally {
-      setIsSubmitting(false);
-    }
+  const handleOpenDeleteModal = (company: CompanyRead) => {
+    setSelectedCompany(company);
+    setIsDeleteModalOpen(true);
   };
 
-  const handleConfirmDelete = async () => {
-    if (!deletingCompany) return;
-    setIsDeleting(true);
-    setDeleteError(null);
+  const handleCloseDeleteModal = () => {
+    setIsDeleteModalOpen(false);
+    setSelectedCompany(null);
+  };
+
+  // Form submit handlers
+  const handleCreateCompany = async (data: CompanyFormData) => {
+    setIsSubmitting(true);
+    setFormApiError(null);
     try {
-      const res = await companiesApi.delete(deletingCompany.id);
-      if (res.error) {
-        const errData = res.error as any;
-        if (errData?.error_code === 'DELETE_BLOCKED' || res.response?.status === 409) {
-          setDeleteError(
-            errData?.message ||
-              'Cannot delete company with associated records (contacts, leads, tasks, or interactions).'
-          );
-        } else {
-          setDeleteError(errData?.message || 'Failed to delete company.');
-        }
+      await createCompany(data);
+      setSuccessMessage(`Company "${data.name.trim()}" created successfully.`);
+      handleCloseAddModal();
+      fetchCompanies();
+    } catch (err: unknown) {
+      if (err instanceof CRMApiError) {
+        setFormApiError(err);
+      } else if (err instanceof Error) {
+        setFormApiError(err.message);
       } else {
-        const deletedName = deletingCompany.name;
-        setDeletingCompany(null);
-        setSuccessMessage(`Company "${deletedName}" deleted successfully.`);
-        fetchCompanies();
-        if (viewingCompany && viewingCompany.id === deletingCompany.id) {
-          setViewingCompany(null);
-        }
+        setFormApiError('Failed to create company.');
       }
-    } catch (err) {
-      setDeleteError(err instanceof Error ? err.message : 'An error occurred during deletion.');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleUpdateCompany = async (data: CompanyFormData) => {
+    if (!selectedCompany) return;
+    setIsSubmitting(true);
+    setFormApiError(null);
+    try {
+      await updateCompany(selectedCompany.id, data);
+      setSuccessMessage(`Company "${data.name.trim()}" updated successfully.`);
+      handleCloseEditModal();
+      fetchCompanies();
+    } catch (err: unknown) {
+      if (err instanceof CRMApiError) {
+        setFormApiError(err);
+      } else if (err instanceof Error) {
+        setFormApiError(err.message);
+      } else {
+        setFormApiError('Failed to update company.');
+      }
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleDeleteCompany = async () => {
+    if (!selectedCompany) return;
+    setIsDeleting(true);
+    try {
+      await deleteCompany(selectedCompany.id);
+      setSuccessMessage(`Company "${selectedCompany.name}" deleted successfully.`);
+      handleCloseDeleteModal();
+      fetchCompanies();
+    } catch (err: unknown) {
+      if (err instanceof CRMApiError) {
+        setError(`Failed to delete company: ${err.message}`);
+      } else if (err instanceof Error) {
+        setError(`Failed to delete company: ${err.message}`);
+      } else {
+        setError('Failed to delete company.');
+      }
+      handleCloseDeleteModal();
     } finally {
       setIsDeleting(false);
     }
   };
 
-  const columns: DataTableColumn<Company>[] = [
+  // Table columns definition
+  const columns: Column<CompanyRead>[] = [
     {
       key: 'name',
       header: 'Company Name',
       sortable: true,
       sortField: 'name',
-      accessor: (company) => (
+      render: (company) => (
         <button
-          onClick={(e) => {
-            e.stopPropagation();
-            handleViewCompany(company);
-          }}
+          onClick={() => handleOpenDetailModal(company)}
           style={{
             background: 'none',
             border: 'none',
             padding: 0,
-            color: colors.accent.primary,
-            fontWeight: 600,
+            margin: 0,
+            color: colors.accent.DEFAULT,
+            fontWeight: 500,
+            textDecoration: 'none',
             cursor: 'pointer',
             textAlign: 'left',
             fontFamily: 'inherit',
             fontSize: 'inherit',
-            textDecoration: 'underline',
           }}
-          data-testid={`company-name-link-${company.id}`}
+          aria-label={`View details for ${company.name}`}
         >
           {company.name}
         </button>
@@ -405,102 +247,94 @@ export default function CompaniesPage() {
       header: 'Industry',
       sortable: true,
       sortField: 'industry',
-      accessor: (company) => company.industry || '—',
+      render: (company) => company.industry || '—',
     },
     {
       key: 'website',
       header: 'Website',
-      accessor: (company) =>
-        company.website ? (
+      render: (company) => {
+        if (!company.website) return '—';
+        const url = company.website.startsWith('http')
+          ? company.website
+          : `https://${company.website}`;
+        return (
           <a
-            href={company.website.startsWith('http') ? company.website : `https://${company.website}`}
+            href={url}
             target="_blank"
             rel="noopener noreferrer"
+            style={{ color: colors.accent.DEFAULT, textDecoration: 'none' }}
             onClick={(e) => e.stopPropagation()}
-            style={{
-              color: colors.accent.primary,
-              textDecoration: 'none',
-            }}
           >
             {company.website}
           </a>
-        ) : (
-          '—'
-        ),
+        );
+      },
     },
     {
       key: 'owner',
       header: 'Owner',
-      accessor: (company) => company.owner || '—',
+      sortable: true,
+      sortField: 'owner',
+      render: (company) => company.owner || '—',
     },
     {
       key: 'created_at',
-      header: 'Created',
+      header: 'Created Date',
       sortable: true,
       sortField: 'created_at',
-      accessor: (company) => formatDate(company.created_at, { fallback: '—' }),
+      render: (company) => formatDate(company.created_at) || '—',
     },
     {
       key: 'actions',
       header: 'Actions',
       align: 'right',
-      accessor: (company) => (
+      render: (company) => (
         <div
-          style={{ display: 'flex', gap: spacing[2], justifyContent: 'flex-end' }}
+          style={{ display: 'flex', gap: spacing.xs, justifyContent: 'flex-end' }}
           onClick={(e) => e.stopPropagation()}
         >
           <button
-            onClick={() => handleViewCompany(company)}
-            data-testid={`view-company-${company.id}`}
+            onClick={() => handleOpenDetailModal(company)}
             style={{
-              backgroundColor: 'transparent',
-              color: colors.surface.onSurface,
-              border: `1px solid ${colors.surface.outlineVariant}`,
-              borderRadius: radii.sm,
-              padding: `${spacing[1]} ${spacing[3]}`,
-              fontSize: typography.styles.caption.fontSize,
-              fontWeight: 500,
+              padding: `${spacing.xs} ${spacing.sm}`,
+              backgroundColor: colors.surface.containerHigh,
+              border: `1px solid ${colors.borderVariant}`,
+              borderRadius: rounded.sm,
+              fontSize: '13px',
               cursor: 'pointer',
+              color: colors.surface.onSurface,
             }}
+            aria-label={`View ${company.name}`}
           >
             View
           </button>
           <button
-            onClick={() => {
-              setEditingCompany(company);
-              setFormServerError(null);
-              setFormFieldErrors({});
-            }}
-            data-testid={`edit-company-${company.id}`}
+            onClick={() => handleOpenEditModal(company)}
             style={{
-              backgroundColor: 'transparent',
-              color: colors.accent.primary,
-              border: `1px solid ${colors.surface.outlineVariant}`,
-              borderRadius: radii.sm,
-              padding: `${spacing[1]} ${spacing[3]}`,
-              fontSize: typography.styles.caption.fontSize,
-              fontWeight: 500,
+              padding: `${spacing.xs} ${spacing.sm}`,
+              backgroundColor: colors.surface.containerHigh,
+              border: `1px solid ${colors.borderVariant}`,
+              borderRadius: rounded.sm,
+              fontSize: '13px',
               cursor: 'pointer',
+              color: colors.surface.onSurface,
             }}
+            aria-label={`Edit ${company.name}`}
           >
             Edit
           </button>
           <button
-            onClick={() => {
-              setDeletingCompany(company);
-              setDeleteError(null);
-            }}
-            data-testid={`delete-company-${company.id}`}
+            onClick={() => handleOpenDeleteModal(company)}
             style={{
-              backgroundColor: 'transparent',
-              color: colors.secondary.main,
-              border: `1px solid ${colors.surface.outlineVariant}`,
-              borderRadius: radii.sm,
-              padding: `${spacing[1]} ${spacing[3]}`,
-              fontSize: typography.styles.caption.fontSize,
-              fontWeight: 500,
+              padding: `${spacing.xs} ${spacing.sm}`,
+              backgroundColor: colors.status.errorContainer,
+              color: colors.status.onErrorContainer,
+              border: 'none',
+              borderRadius: rounded.sm,
+              fontSize: '13px',
               cursor: 'pointer',
             }}
+            aria-label={`Delete ${company.name}`}
           >
             Delete
           </button>
@@ -510,544 +344,524 @@ export default function CompaniesPage() {
   ];
 
   return (
-    <div
-      data-testid="companies-page"
-      style={{
-        display: 'flex',
-        flexDirection: 'column',
-        gap: spacing[6],
-      }}
+    <section
+      aria-label="Companies Management"
+      style={{ display: 'flex', flexDirection: 'column', gap: spacing.lg }}
     >
-      {/* Breadcrumb Navigation (FR-10) */}
-      <nav aria-label="Breadcrumb" style={{ marginBottom: `-${spacing[3]}` }}>
+      {/* Breadcrumbs Navigation (FR-10) */}
+      <nav aria-label="Breadcrumb" style={{ marginBottom: `-${spacing.sm}` }}>
         <ol
           style={{
             display: 'flex',
             alignItems: 'center',
-            gap: spacing[2],
+            gap: spacing.xs,
             listStyle: 'none',
-            padding: 0,
             margin: 0,
-            fontFamily: typography.styles.caption.fontFamily,
-            fontSize: typography.styles.caption.fontSize,
+            padding: 0,
+            fontSize: typography.sizes.caption.fontSize,
             color: colors.surface.onSurfaceVariant,
           }}
         >
           <li>
-            <Link href="/" style={{ color: colors.accent.primary, textDecoration: 'none' }}>
-              Home
-            </Link>
+            <a
+              href="/"
+              style={{ color: colors.accent.DEFAULT, textDecoration: 'none' }}
+            >
+              Dashboard
+            </a>
           </li>
           <li>/</li>
-          <li aria-current="page" style={{ fontWeight: 600, color: colors.surface.onSurface }}>
+          <li aria-current="page" style={{ color: colors.surface.onSurface, fontWeight: 500 }}>
             Companies
           </li>
         </ol>
       </nav>
 
-      {/* Page Header */}
-      <div
+      {/* Header Banner */}
+      <header
         style={{
           display: 'flex',
-          flexWrap: 'wrap',
-          alignItems: 'center',
           justifyContent: 'space-between',
-          gap: spacing[4],
-          borderBottom: `1px solid ${colors.surface.outlineVariant}`,
-          paddingBottom: spacing[4],
+          alignItems: 'flex-start',
+          gap: spacing.md,
+          flexWrap: 'wrap',
         }}
       >
         <div>
           <h1
             style={{
-              fontFamily: typography.styles.displayLg.fontFamily,
-              fontSize: typography.styles.headlineMd.fontSize,
-              fontWeight: typography.styles.headlineMd.fontWeight,
+              fontFamily: typography.fontFamily.serif,
+              fontSize: typography.sizes['headline-md'].fontSize,
+              fontWeight: typography.sizes['headline-md'].fontWeight,
+              lineHeight: typography.sizes['headline-md'].lineHeight,
               color: colors.surface.onSurface,
-              margin: `0 0 ${spacing[1]} 0`,
+              margin: 0,
             }}
           >
             Companies
           </h1>
           <p
             style={{
-              fontFamily: typography.styles.bodyMd.fontFamily,
-              fontSize: typography.styles.bodyMd.fontSize,
+              fontFamily: typography.fontFamily.sans,
+              fontSize: typography.sizes['body-md'].fontSize,
               color: colors.surface.onSurfaceVariant,
-              margin: 0,
+              margin: `${spacing.xs} 0 0 0`,
             }}
           >
-            Manage company accounts and view associated contacts, deals, and activities.
+            Manage company accounts, organizational details, and business relationships.
           </p>
         </div>
 
         <button
-          onClick={() => {
-            setIsAddModalOpen(true);
-            setFormServerError(null);
-            setFormFieldErrors({});
-          }}
-          data-testid="add-company-button"
+          onClick={handleOpenAddModal}
           style={{
-            backgroundColor: colors.accent.primary,
-            color: '#ffffff',
+            padding: `${spacing.sm} ${spacing.lg}`,
+            backgroundColor: colors.accent.DEFAULT,
+            color: colors.accent.onAccent,
             border: 'none',
-            borderRadius: radii.md,
-            padding: `${spacing[2]} ${spacing[4]}`,
-            fontFamily: typography.styles.labelCaps.fontFamily,
-            fontSize: typography.styles.bodyMd.fontSize,
-            fontWeight: 600,
+            borderRadius: rounded.md,
+            fontWeight: 500,
+            fontSize: typography.sizes['body-md'].fontSize,
             cursor: 'pointer',
+            boxShadow: shadows.sm,
             display: 'inline-flex',
             alignItems: 'center',
-            gap: spacing[2],
+            gap: spacing.xs,
           }}
+          aria-label="Add new company"
         >
-          + Add Company
+          <span>+</span> Add Company
         </button>
-      </div>
+      </header>
 
-      {/* Success Alert */}
+      {/* Notification Alerts */}
       {successMessage && (
-        <Alert
-          variant="success"
+        <SuccessAlert
           message={successMessage}
-          onClose={() => setSuccessMessage(null)}
-          data-testid="companies-success-alert"
+          onDismiss={() => setSuccessMessage(null)}
+        />
+      )}
+      {error && (
+        <ErrorAlert
+          message={error}
+          onDismiss={() => setError(null)}
         />
       )}
 
-      {/* Page Error Alert */}
-      {pageError && (
-        <Alert
-          variant="error"
-          message={pageError}
-          onClose={() => setPageError(null)}
-          data-testid="companies-error-alert"
-        />
-      )}
-
-      {/* Data Table */}
-      <DataTable
-        data={companies}
+      {/* Main Companies DataTable (FR-1, FR-14) */}
+      <DataTable<CompanyRead>
         columns={columns}
-        keyExtractor={(item) => item.id}
+        data={companies}
         totalItems={totalItems}
-        page={page}
-        pageSize={pageSize}
-        onPageChange={(newPage) => setPage(newPage)}
-        sortBy={sortBy}
-        sortOrder={sortOrder}
-        onSortChange={(field, order) => {
-          setSortBy(field);
-          setSortOrder(order);
-        }}
-        searchQuery={searchQuery}
-        onSearchChange={(query) => {
-          setSearchQuery(query);
+        loading={loading}
+        error={error}
+        searchValue={searchValue}
+        searchPlaceholder="Search companies by name or industry..."
+        onSearchChange={(value) => {
+          setSearchValue(value);
           setPage(1);
         }}
-        searchPlaceholder="Search companies by name or industry..."
-        isLoading={isLoading}
-        emptyTitle="No companies found"
-        emptyDescription="Get started by creating your first company record."
-        onAdd={() => {
-          setIsAddModalOpen(true);
-          setFormServerError(null);
-          setFormFieldErrors({});
+        sortColumn={sortColumn}
+        sortDirection={sortDirection}
+        onSortChange={(col, dir) => {
+          setSortColumn(col);
+          setSortDirection(dir);
         }}
-        addLabel="Add Company"
-        onRowClick={(item) => handleViewCompany(item)}
-        data-testid="companies-table"
+        page={page}
+        pageSize={pageSize}
+        onPageChange={(p) => setPage(p)}
+        onPageSizeChange={(ps) => {
+          setPageSize(ps);
+          setPage(1);
+        }}
+        emptyTitle="No companies found"
+        emptyMessage="Get started by adding your first company to track organizational relationships."
+        emptyActionLabel="Add Company"
+        onEmptyAction={handleOpenAddModal}
+        getRowKey={(item) => item.id}
+        onRowClick={(item) => handleOpenDetailModal(item)}
+        ariaLabel="Companies Table"
       />
 
       {/* Add Company Modal */}
-      <Modal
-        isOpen={isAddModalOpen}
-        onClose={() => setIsAddModalOpen(false)}
-        title="Add Company"
-        data-testid="add-company-modal"
-      >
-        <CompanyForm
-          onSubmit={handleCreateSubmit}
-          onCancel={() => setIsAddModalOpen(false)}
-          isLoading={isSubmitting}
-          submitLabel="Create Company"
-          serverError={formServerError}
-          serverFieldErrors={formFieldErrors}
-        />
-      </Modal>
+      {isAddModalOpen && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="add-company-modal-title"
+          style={{
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            backgroundColor: 'rgba(0, 0, 0, 0.5)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 1000,
+            padding: spacing.md,
+          }}
+          onClick={(e) => {
+            if (e.target === e.currentTarget) handleCloseAddModal();
+          }}
+        >
+          <div
+            style={{
+              maxWidth: '600px',
+              width: '100%',
+              maxHeight: '90vh',
+              overflowY: 'auto',
+              borderRadius: rounded.lg,
+            }}
+          >
+            <CompanyForm
+              onSubmit={handleCreateCompany}
+              onCancel={handleCloseAddModal}
+              isSubmitting={isSubmitting}
+              apiError={formApiError}
+              submitLabel="Create Company"
+              title="Add New Company"
+            />
+          </div>
+        </div>
+      )}
 
       {/* Edit Company Modal */}
-      <Modal
-        isOpen={!!editingCompany}
-        onClose={() => setEditingCompany(null)}
-        title="Edit Company"
-        data-testid="edit-company-modal"
-      >
-        {editingCompany && (
-          <CompanyForm
-            initialValues={editingCompany}
-            onSubmit={handleUpdateSubmit}
-            onCancel={() => setEditingCompany(null)}
-            isLoading={isSubmitting}
-            submitLabel="Save Changes"
-            serverError={formServerError}
-            serverFieldErrors={formFieldErrors}
-          />
-        )}
-      </Modal>
+      {isEditModalOpen && selectedCompany && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="edit-company-modal-title"
+          style={{
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            backgroundColor: 'rgba(0, 0, 0, 0.5)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 1000,
+            padding: spacing.md,
+          }}
+          onClick={(e) => {
+            if (e.target === e.currentTarget) handleCloseEditModal();
+          }}
+        >
+          <div
+            style={{
+              maxWidth: '600px',
+              width: '100%',
+              maxHeight: '90vh',
+              overflowY: 'auto',
+              borderRadius: rounded.lg,
+            }}
+          >
+            <CompanyForm
+              initialValues={selectedCompany}
+              onSubmit={handleUpdateCompany}
+              onCancel={handleCloseEditModal}
+              isSubmitting={isSubmitting}
+              apiError={formApiError}
+              submitLabel="Save Changes"
+              title="Edit Company"
+            />
+          </div>
+        </div>
+      )}
 
-      {/* Company Detail Modal (FR-13) */}
-      <Modal
-        isOpen={!!viewingCompany}
-        onClose={() => setViewingCompany(null)}
-        title={viewingCompany?.name || 'Company Details'}
-        maxWidth="760px"
-        data-testid="view-company-modal"
-      >
-        {viewingCompany && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: spacing[6] }}>
-            {/* Tab Navigation */}
+      {/* Company Detail Modal */}
+      {isDetailModalOpen && selectedCompany && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="detail-company-modal-title"
+          style={{
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            backgroundColor: 'rgba(0, 0, 0, 0.5)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 1000,
+            padding: spacing.md,
+          }}
+          onClick={(e) => {
+            if (e.target === e.currentTarget) handleCloseDetailModal();
+          }}
+        >
+          <div
+            style={{
+              maxWidth: '640px',
+              width: '100%',
+              backgroundColor: colors.surface.background,
+              borderRadius: rounded.lg,
+              padding: spacing.xl,
+              boxShadow: shadows.lg,
+              maxHeight: '90vh',
+              overflowY: 'auto',
+            }}
+          >
             <div
               style={{
                 display: 'flex',
-                gap: spacing[2],
-                borderBottom: `1px solid ${colors.surface.outlineVariant}`,
-                paddingBottom: spacing[2],
+                justifyContent: 'space-between',
+                alignItems: 'flex-start',
+                marginBottom: spacing.lg,
               }}
             >
-              {[
-                { key: 'overview', label: 'Overview' },
-                { key: 'contacts', label: `Contacts (${viewingCompany.contacts?.length || 0})` },
-                { key: 'leads', label: `Leads (${viewingCompany.leads?.length || 0})` },
-                { key: 'tasks', label: `Tasks (${viewingCompany.tasks?.length || 0})` },
-                { key: 'interactions', label: `Interactions (${viewingCompany.interactions?.length || 0})` },
-              ].map((tab) => (
-                <button
-                  key={tab.key}
-                  onClick={() => setActiveDetailTab(tab.key as any)}
-                  style={{
-                    backgroundColor: 'transparent',
-                    border: 'none',
-                    borderBottom:
-                      activeDetailTab === tab.key ? `2px solid ${colors.accent.primary}` : '2px solid transparent',
-                    color: activeDetailTab === tab.key ? colors.accent.primary : colors.surface.onSurfaceVariant,
-                    fontFamily: typography.styles.bodyMd.fontFamily,
-                    fontSize: typography.styles.caption.fontSize,
-                    fontWeight: activeDetailTab === tab.key ? 600 : 400,
-                    padding: `${spacing[2]} ${spacing[3]}`,
-                    cursor: 'pointer',
-                  }}
-                  data-testid={`company-detail-tab-${tab.key}`}
-                >
-                  {tab.label}
-                </button>
-              ))}
-            </div>
-
-            {isDetailLoading && (
-              <div style={{ padding: spacing[4], textAlign: 'center', color: colors.surface.onSurfaceVariant }}>
-                Loading details...
-              </div>
-            )}
-
-            {!isDetailLoading && activeDetailTab === 'overview' && (
-              <div
+              <h2
+                id="detail-company-modal-title"
                 style={{
-                  display: 'grid',
-                  gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))',
-                  gap: spacing[4],
+                  margin: 0,
+                  fontFamily: typography.fontFamily.serif,
+                  fontSize: typography.sizes['headline-sm'].fontSize,
+                  color: colors.surface.onSurface,
                 }}
               >
-                <div>
-                  <span style={{ fontSize: typography.styles.caption.fontSize, color: colors.surface.onSurfaceVariant }}>
-                    Industry
-                  </span>
-                  <div style={{ fontWeight: 500, marginTop: spacing[1] }}>{viewingCompany.industry || '—'}</div>
-                </div>
-                <div>
-                  <span style={{ fontSize: typography.styles.caption.fontSize, color: colors.surface.onSurfaceVariant }}>
-                    Website
-                  </span>
-                  <div style={{ fontWeight: 500, marginTop: spacing[1] }}>
-                    {viewingCompany.website ? (
-                      <a
-                        href={
-                          viewingCompany.website.startsWith('http')
-                            ? viewingCompany.website
-                            : `https://${viewingCompany.website}`
-                        }
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        style={{ color: colors.accent.primary }}
-                      >
-                        {viewingCompany.website}
-                      </a>
-                    ) : (
-                      '—'
-                    )}
-                  </div>
-                </div>
-                <div>
-                  <span style={{ fontSize: typography.styles.caption.fontSize, color: colors.surface.onSurfaceVariant }}>
-                    Primary Email
-                  </span>
-                  <div style={{ fontWeight: 500, marginTop: spacing[1] }}>{viewingCompany.email || '—'}</div>
-                </div>
-                <div>
-                  <span style={{ fontSize: typography.styles.caption.fontSize, color: colors.surface.onSurfaceVariant }}>
-                    Owner
-                  </span>
-                  <div style={{ fontWeight: 500, marginTop: spacing[1] }}>{viewingCompany.owner || '—'}</div>
-                </div>
-                <div>
-                  <span style={{ fontSize: typography.styles.caption.fontSize, color: colors.surface.onSurfaceVariant }}>
-                    Created Date
-                  </span>
-                  <div style={{ fontWeight: 500, marginTop: spacing[1] }}>
-                    {formatDate(viewingCompany.created_at, { fallback: '—' })}
-                  </div>
-                </div>
-                <div style={{ gridColumn: '1 / -1' }}>
-                  <span style={{ fontSize: typography.styles.caption.fontSize, color: colors.surface.onSurfaceVariant }}>
-                    Notes
-                  </span>
-                  <div
-                    style={{
-                      marginTop: spacing[1],
-                      padding: spacing[3],
-                      backgroundColor: colors.surface.containerLow,
-                      borderRadius: radii.sm,
-                      whiteSpace: 'pre-wrap',
-                      fontSize: typography.styles.bodyMd.fontSize,
-                    }}
+                {selectedCompany.name}
+              </h2>
+              <button
+                onClick={handleCloseDetailModal}
+                aria-label="Close modal"
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  fontSize: '20px',
+                  cursor: 'pointer',
+                  color: colors.surface.onSurfaceVariant,
+                  padding: spacing.xs,
+                }}
+              >
+                ✕
+              </button>
+            </div>
+
+            <div
+              style={{
+                display: 'grid',
+                gridTemplateColumns: '1fr 1fr',
+                gap: spacing.md,
+                marginBottom: spacing.lg,
+                fontSize: typography.sizes['body-md'].fontSize,
+              }}
+            >
+              <div>
+                <span style={{ color: colors.surface.onSurfaceVariant, display: 'block', fontSize: '13px' }}>
+                  Industry
+                </span>
+                <strong>{selectedCompany.industry || '—'}</strong>
+              </div>
+
+              <div>
+                <span style={{ color: colors.surface.onSurfaceVariant, display: 'block', fontSize: '13px' }}>
+                  Owner
+                </span>
+                <strong>{selectedCompany.owner || '—'}</strong>
+              </div>
+
+              <div>
+                <span style={{ color: colors.surface.onSurfaceVariant, display: 'block', fontSize: '13px' }}>
+                  Website
+                </span>
+                {selectedCompany.website ? (
+                  <a
+                    href={
+                      selectedCompany.website.startsWith('http')
+                        ? selectedCompany.website
+                        : `https://${selectedCompany.website}`
+                    }
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    style={{ color: colors.accent.DEFAULT, textDecoration: 'none' }}
                   >
-                    {viewingCompany.notes || 'No notes provided.'}
+                    {selectedCompany.website}
+                  </a>
+                ) : (
+                  <strong>—</strong>
+                )}
+              </div>
+
+              <div>
+                <span style={{ color: colors.surface.onSurfaceVariant, display: 'block', fontSize: '13px' }}>
+                  Contact Email
+                </span>
+                <strong>{selectedCompany.email || '—'}</strong>
+              </div>
+
+              <div>
+                <span style={{ color: colors.surface.onSurfaceVariant, display: 'block', fontSize: '13px' }}>
+                  Created At
+                </span>
+                <strong>{formatDate(selectedCompany.created_at) || '—'}</strong>
+              </div>
+
+              <div>
+                <span style={{ color: colors.surface.onSurfaceVariant, display: 'block', fontSize: '13px' }}>
+                  Updated At
+                </span>
+                <strong>{formatDate(selectedCompany.updated_at) || '—'}</strong>
+              </div>
+            </div>
+
+            {selectedCompany.notes && (
+              <div style={{ marginBottom: spacing.lg }}>
+                <span style={{ color: colors.surface.onSurfaceVariant, display: 'block', fontSize: '13px' }}>
+                  Notes
+                </span>
+                <p
+                  style={{
+                    margin: `${spacing.xs} 0 0 0`,
+                    whiteSpace: 'pre-wrap',
+                    fontSize: typography.sizes['body-md'].fontSize,
+                    color: colors.surface.onSurface,
+                  }}
+                >
+                  {selectedCompany.notes}
+                </p>
+              </div>
+            )}
+
+            {/* Linked Records Summary */}
+            <div
+              style={{
+                borderTop: `1px solid ${colors.borderVariant}`,
+                paddingTop: spacing.md,
+                marginBottom: spacing.lg,
+              }}
+            >
+              <h3
+                style={{
+                  fontSize: '15px',
+                  fontWeight: 600,
+                  margin: `0 0 ${spacing.sm} 0`,
+                  color: colors.surface.onSurface,
+                }}
+              >
+                Linked Records
+              </h3>
+
+              {isDetailLoading ? (
+                <LoadingState message="Loading associated records..." />
+              ) : companyDetail ? (
+                <div
+                  style={{
+                    display: 'grid',
+                    gridTemplateColumns: 'repeat(4, 1fr)',
+                    gap: spacing.sm,
+                    textAlign: 'center',
+                    backgroundColor: colors.surface.surfaceContainerLow,
+                    padding: spacing.sm,
+                    borderRadius: rounded.md,
+                  }}
+                >
+                  <div>
+                    <div style={{ fontSize: '18px', fontWeight: 600 }}>
+                      {companyDetail.contacts?.length ?? 0}
+                    </div>
+                    <div style={{ fontSize: '12px', color: colors.surface.onSurfaceVariant }}>
+                      Contacts
+                    </div>
+                  </div>
+                  <div>
+                    <div style={{ fontSize: '18px', fontWeight: 600 }}>
+                      {companyDetail.leads?.length ?? 0}
+                    </div>
+                    <div style={{ fontSize: '12px', color: colors.surface.onSurfaceVariant }}>
+                      Leads
+                    </div>
+                  </div>
+                  <div>
+                    <div style={{ fontSize: '18px', fontWeight: 600 }}>
+                      {companyDetail.tasks?.length ?? 0}
+                    </div>
+                    <div style={{ fontSize: '12px', color: colors.surface.onSurfaceVariant }}>
+                      Tasks
+                    </div>
+                  </div>
+                  <div>
+                    <div style={{ fontSize: '18px', fontWeight: 600 }}>
+                      {companyDetail.interactions?.length ?? 0}
+                    </div>
+                    <div style={{ fontSize: '12px', color: colors.surface.onSurfaceVariant }}>
+                      Interactions
+                    </div>
                   </div>
                 </div>
-              </div>
-            )}
+              ) : (
+                <div style={{ fontSize: '13px', color: colors.surface.onSurfaceVariant }}>
+                  No linked records details available.
+                </div>
+              )}
+            </div>
 
-            {!isDetailLoading && activeDetailTab === 'contacts' && (
-              <div>
-                {!viewingCompany.contacts || viewingCompany.contacts.length === 0 ? (
-                  <p style={{ color: colors.surface.onSurfaceVariant, fontStyle: 'italic' }}>
-                    No contacts linked to this company.
-                  </p>
-                ) : (
-                  <ul style={{ listStyle: 'none', padding: 0, margin: 0, display: 'flex', flexDirection: 'column', gap: spacing[2] }}>
-                    {viewingCompany.contacts.map((contact) => (
-                      <li
-                        key={contact.id}
-                        style={{
-                          padding: spacing[3],
-                          backgroundColor: colors.surface.containerLow,
-                          borderRadius: radii.sm,
-                          display: 'flex',
-                          justifyContent: 'space-between',
-                          alignItems: 'center',
-                        }}
-                      >
-                        <div>
-                          <div style={{ fontWeight: 600 }}>{contact.name}</div>
-                          <div style={{ fontSize: typography.styles.caption.fontSize, color: colors.surface.onSurfaceVariant }}>
-                            {contact.email} {contact.phone ? `• ${contact.phone}` : ''}
-                          </div>
-                        </div>
-                        {contact.role && (
-                          <span style={{ fontSize: typography.styles.caption.fontSize, color: colors.surface.onSurfaceVariant }}>
-                            {contact.role}
-                          </span>
-                        )}
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </div>
-            )}
-
-            {!isDetailLoading && activeDetailTab === 'leads' && (
-              <div>
-                {!viewingCompany.leads || viewingCompany.leads.length === 0 ? (
-                  <p style={{ color: colors.surface.onSurfaceVariant, fontStyle: 'italic' }}>
-                    No leads linked to this company.
-                  </p>
-                ) : (
-                  <ul style={{ listStyle: 'none', padding: 0, margin: 0, display: 'flex', flexDirection: 'column', gap: spacing[2] }}>
-                    {viewingCompany.leads.map((lead) => (
-                      <li
-                        key={lead.id}
-                        style={{
-                          padding: spacing[3],
-                          backgroundColor: colors.surface.containerLow,
-                          borderRadius: radii.sm,
-                          display: 'flex',
-                          justifyContent: 'space-between',
-                          alignItems: 'center',
-                        }}
-                      >
-                        <div>
-                          <div style={{ fontWeight: 600 }}>{lead.title}</div>
-                          <div style={{ fontSize: typography.styles.caption.fontSize, color: colors.surface.onSurfaceVariant }}>
-                            Value: ${lead.value?.toLocaleString()}
-                          </div>
-                        </div>
-                        <StatusBadge status={lead.status} />
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </div>
-            )}
-
-            {!isDetailLoading && activeDetailTab === 'tasks' && (
-              <div>
-                {!viewingCompany.tasks || viewingCompany.tasks.length === 0 ? (
-                  <p style={{ color: colors.surface.onSurfaceVariant, fontStyle: 'italic' }}>
-                    No tasks linked to this company.
-                  </p>
-                ) : (
-                  <ul style={{ listStyle: 'none', padding: 0, margin: 0, display: 'flex', flexDirection: 'column', gap: spacing[2] }}>
-                    {viewingCompany.tasks.map((task) => (
-                      <li
-                        key={task.id}
-                        style={{
-                          padding: spacing[3],
-                          backgroundColor: colors.surface.containerLow,
-                          borderRadius: radii.sm,
-                          display: 'flex',
-                          justifyContent: 'space-between',
-                          alignItems: 'center',
-                        }}
-                      >
-                        <div>
-                          <div style={{ fontWeight: 500, textDecoration: task.completed ? 'line-through' : 'none' }}>
-                            {task.description}
-                          </div>
-                          <div style={{ fontSize: typography.styles.caption.fontSize, color: colors.surface.onSurfaceVariant }}>
-                            Due: {formatDate(task.due_date, { fallback: '—' })}
-                          </div>
-                        </div>
-                        <span
-                          style={{
-                            fontSize: typography.styles.caption.fontSize,
-                            fontWeight: 600,
-                            color: task.completed ? colors.accent.primary : colors.secondary.main,
-                          }}
-                        >
-                          {task.completed ? 'Completed' : 'Pending'}
-                        </span>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </div>
-            )}
-
-            {!isDetailLoading && activeDetailTab === 'interactions' && (
-              <div>
-                {!viewingCompany.interactions || viewingCompany.interactions.length === 0 ? (
-                  <p style={{ color: colors.surface.onSurfaceVariant, fontStyle: 'italic' }}>
-                    No interactions recorded for this company.
-                  </p>
-                ) : (
-                  <ul style={{ listStyle: 'none', padding: 0, margin: 0, display: 'flex', flexDirection: 'column', gap: spacing[2] }}>
-                    {viewingCompany.interactions.map((interaction) => (
-                      <li
-                        key={interaction.id}
-                        style={{
-                          padding: spacing[3],
-                          backgroundColor: colors.surface.containerLow,
-                          borderRadius: radii.sm,
-                          display: 'flex',
-                          flexDirection: 'column',
-                          gap: spacing[1],
-                        }}
-                      >
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                          <span style={{ fontWeight: 600, textTransform: 'capitalize' }}>{interaction.type}</span>
-                          <span style={{ fontSize: typography.styles.caption.fontSize, color: colors.surface.onSurfaceVariant }}>
-                            {formatDate(interaction.date, { fallback: '—' })}
-                          </span>
-                        </div>
-                        <div style={{ fontSize: typography.styles.bodyMd.fontSize, color: colors.surface.onSurface }}>
-                          {interaction.summary}
-                        </div>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </div>
-            )}
-
-            {/* Modal Footer Actions */}
-            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: spacing[3], marginTop: spacing[4] }}>
+            {/* Actions */}
+            <div
+              style={{
+                display: 'flex',
+                justifyContent: 'flex-end',
+                gap: spacing.md,
+                borderTop: `1px solid ${colors.borderVariant}`,
+                paddingTop: spacing.md,
+              }}
+            >
               <button
                 onClick={() => {
-                  setEditingCompany(viewingCompany);
-                  setViewingCompany(null);
-                  setFormServerError(null);
-                  setFormFieldErrors({});
+                  const companyToEdit = selectedCompany;
+                  handleCloseDetailModal();
+                  handleOpenEditModal(companyToEdit);
                 }}
-                data-testid="detail-edit-button"
                 style={{
-                  backgroundColor: colors.accent.primary,
-                  color: '#ffffff',
-                  border: 'none',
-                  borderRadius: radii.md,
-                  padding: `${spacing[2]} ${spacing[4]}`,
-                  fontWeight: 600,
+                  padding: `${spacing.sm} ${spacing.lg}`,
+                  backgroundColor: colors.surface.containerHigh,
+                  color: colors.surface.onSurface,
+                  border: `1px solid ${colors.borderVariant}`,
+                  borderRadius: rounded.md,
                   cursor: 'pointer',
+                  fontWeight: 500,
                 }}
               >
                 Edit Company
               </button>
               <button
-                onClick={() => setViewingCompany(null)}
+                onClick={handleCloseDetailModal}
                 style={{
-                  backgroundColor: colors.surface.containerLow,
-                  color: colors.surface.onSurface,
-                  border: `1px solid ${colors.surface.outlineVariant}`,
-                  borderRadius: radii.md,
-                  padding: `${spacing[2]} ${spacing[4]}`,
-                  fontWeight: 500,
+                  padding: `${spacing.sm} ${spacing.lg}`,
+                  backgroundColor: colors.accent.DEFAULT,
+                  color: colors.accent.onAccent,
+                  border: 'none',
+                  borderRadius: rounded.md,
                   cursor: 'pointer',
+                  fontWeight: 500,
                 }}
               >
                 Close
               </button>
             </div>
           </div>
-        )}
-      </Modal>
+        </div>
+      )}
 
       {/* Delete Confirmation Dialog */}
       <ConfirmationDialog
-        isOpen={!!deletingCompany}
+        isOpen={isDeleteModalOpen}
         title="Delete Company"
         message={
-          <div>
-            {deleteError && (
-              <div style={{ marginBottom: spacing[3] }}>
-                <Alert variant="error" message={deleteError} />
-              </div>
-            )}
-            <p style={{ margin: 0 }}>
-              Are you sure you want to delete company <strong>{deletingCompany?.name}</strong>?
-            </p>
-          </div>
+          selectedCompany
+            ? `Are you sure you want to delete "${selectedCompany.name}"? This action cannot be undone.`
+            : 'Are you sure you want to delete this company?'
         }
-        confirmLabel="Delete Company"
-        cancelLabel="Cancel"
-        onConfirm={handleConfirmDelete}
-        onCancel={() => {
-          setDeletingCompany(null);
-          setDeleteError(null);
-        }}
-        isDanger={true}
+        confirmLabel="Delete"
+        confirmVariant="danger"
+        onConfirm={handleDeleteCompany}
+        onCancel={handleCloseDeleteModal}
         isLoading={isDeleting}
       />
-    </div>
+    </section>
   );
 }

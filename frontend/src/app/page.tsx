@@ -1,129 +1,164 @@
 import React from 'react';
-import Link from 'next/link';
-import { colors, radii, shadows, spacing, typography } from '../lib/tokens';
+import { colors, spacing, typography, rounded, shadows } from '@/lib/tokens';
 
-const MODULES = [
+export interface ModuleLink {
+  title: string;
+  href: string;
+  description: string;
+}
+
+export const MODULE_LINKS: ModuleLink[] = [
   {
     title: 'Companies',
     href: '/companies',
-    description: 'Manage company accounts and customer organizations.',
+    description: 'Manage company accounts, organizational details, and business relationships.',
   },
   {
     title: 'Contacts',
     href: '/contacts',
-    description: 'Track individual contact details and information.',
+    description: 'Track contact people, communication channels, and company affiliations.',
   },
   {
     title: 'Leads',
     href: '/leads',
-    description: 'Monitor prospective leads and pipeline status.',
+    description: 'Monitor lead progression, qualification statuses, and ownership assignments.',
   },
   {
     title: 'Tasks',
     href: '/tasks',
-    description: 'Manage operational tasks and track due dates.',
+    description: 'Organize action items, due dates, priority assignments, and entity connections.',
   },
   {
     title: 'Interactions',
     href: '/interactions',
-    description: 'Record append-only interaction history and notes.',
+    description: 'Log and review append-only interaction records, meeting notes, and timestamps.',
   },
 ];
 
 export default function HomePage() {
   return (
     <section
-      aria-labelledby="dashboard-heading"
+      aria-label="Dashboard Overview"
       style={{
         display: 'flex',
         flexDirection: 'column',
-        gap: spacing[8],
+        gap: spacing['2xl'],
       }}
     >
+      {/* Header section */}
       <header
         style={{
-          borderBottom: `1px solid ${colors.surface.outlineVariant}`,
-          paddingBottom: spacing[6],
+          display: 'flex',
+          flexDirection: 'column',
+          gap: spacing.sm,
+          borderBottom: `1px solid ${colors.borderVariant}`,
+          paddingBottom: spacing.xl,
         }}
       >
         <h1
-          id="dashboard-heading"
           style={{
-            fontFamily: typography.styles.displayLg.fontFamily,
-            fontSize: typography.styles.displayLg.fontSize,
-            fontWeight: typography.styles.displayLg.fontWeight,
-            lineHeight: typography.styles.displayLg.lineHeight,
-            letterSpacing: typography.styles.displayLg.letterSpacing,
+            fontFamily: typography.fontFamily.serif,
+            fontSize: typography.sizes['headline-md'].fontSize,
+            fontWeight: typography.sizes['headline-md'].fontWeight,
+            lineHeight: typography.sizes['headline-md'].lineHeight,
             color: colors.surface.onSurface,
-            margin: `0 0 ${spacing[2]} 0`,
+            margin: 0,
           }}
         >
-          CRM Platform Foundation
+          CRM Platform Overview
         </h1>
         <p
           style={{
-            fontFamily: typography.styles.bodyLg.fontFamily,
-            fontSize: typography.styles.bodyLg.fontSize,
-            lineHeight: typography.styles.bodyLg.lineHeight,
+            fontFamily: typography.fontFamily.sans,
+            fontSize: typography.sizes['body-lg'].fontSize,
+            lineHeight: typography.sizes['body-lg'].lineHeight,
             color: colors.surface.onSurfaceVariant,
             margin: 0,
-            maxWidth: '680px',
+            maxWidth: '800px',
           }}
         >
-          Welcome to the CRM Platform. Access customer relationship records, contacts, leads, tasks, and interaction history below.
+          Welcome to the CRM Platform. Select a module below to view and manage companies, contacts, leads, tasks, and interaction history.
         </p>
       </header>
 
-      <div
-        style={{
-          display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))',
-          gap: spacing[6],
-        }}
-      >
-        {MODULES.map((module) => (
-          <Link
-            key={module.href}
-            href={module.href}
-            style={{
-              display: 'flex',
-              flexDirection: 'column',
-              gap: spacing[3],
-              padding: spacing[6],
-              backgroundColor: colors.surface.containerLowest,
-              borderRadius: radii.lg,
-              border: `1px solid ${colors.surface.outlineVariant}`,
-              boxShadow: shadows.subtle,
-              textDecoration: 'none',
-              color: 'inherit',
-              transition: 'border-color 0.2s ease, box-shadow 0.2s ease',
-            }}
-          >
-            <h2
-              style={{
-                fontFamily: typography.styles.headlineSm.fontFamily,
-                fontSize: typography.styles.headlineSm.fontSize,
-                fontWeight: typography.styles.headlineSm.fontWeight,
-                color: colors.accent.primary,
-                margin: 0,
-              }}
-            >
-              {module.title}
-            </h2>
-            <p
-              style={{
-                fontFamily: typography.styles.bodyMd.fontFamily,
-                fontSize: typography.styles.bodyMd.fontSize,
-                lineHeight: typography.styles.bodyMd.lineHeight,
-                color: colors.surface.onSurfaceVariant,
-                margin: 0,
-              }}
-            >
-              {module.description}
-            </p>
-          </Link>
-        ))}
-      </div>
+      {/* Module Navigation Grid */}
+      <nav aria-label="CRM Modules Navigation">
+        <ul
+          style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))',
+            gap: spacing.xl,
+            listStyle: 'none',
+            margin: 0,
+            padding: 0,
+          }}
+        >
+          {MODULE_LINKS.map((module) => (
+            <li key={module.href}>
+              <a
+                href={module.href}
+                style={{
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: spacing.sm,
+                  padding: spacing.xl,
+                  backgroundColor: colors.surface.containerLow,
+                  border: `1px solid ${colors.borderVariant}`,
+                  borderRadius: rounded.lg,
+                  boxShadow: shadows.sm,
+                  textDecoration: 'none',
+                  color: colors.surface.onSurface,
+                  height: '100%',
+                  boxSizing: 'border-box',
+                  transition: 'border-color 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease',
+                }}
+              >
+                <div
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                  }}
+                >
+                  <h2
+                    style={{
+                      fontFamily: typography.fontFamily.serif,
+                      fontSize: typography.sizes['headline-sm'].fontSize,
+                      fontWeight: typography.sizes['headline-sm'].fontWeight,
+                      lineHeight: typography.sizes['headline-sm'].lineHeight,
+                      color: colors.accent.DEFAULT,
+                      margin: 0,
+                    }}
+                  >
+                    {module.title}
+                  </h2>
+                  <span
+                    aria-hidden="true"
+                    style={{
+                      fontSize: '18px',
+                      color: colors.accent.DEFAULT,
+                      fontWeight: 'bold',
+                    }}
+                  >
+                    →
+                  </span>
+                </div>
+                <p
+                  style={{
+                    fontFamily: typography.fontFamily.sans,
+                    fontSize: typography.sizes['body-md'].fontSize,
+                    lineHeight: typography.sizes['body-md'].lineHeight,
+                    color: colors.surface.onSurfaceVariant,
+                    margin: 0,
+                  }}
+                >
+                  {module.description}
+                </p>
+              </a>
+            </li>
+          ))}
+        </ul>
+      </nav>
     </section>
   );
 }

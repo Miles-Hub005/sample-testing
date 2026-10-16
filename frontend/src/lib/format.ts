@@ -1,146 +1,96 @@
-/**
- * Formats an integer amount in minor currency units (e.g. cents) as a formatted currency string.
- *
- * Converts minor units to a formatted string (e.g., 123456 -> "$1,234.56") without
- * floating-point arithmetic to prevent precision and rounding errors.
- *
- * @param amount - Integer amount in minor units (e.g., cents).
- * @param currencySymbol - Currency symbol prefix (defaults to "$").
- * @returns Formatted currency string (e.g. "$1,234.56" or "-$1,234.56").
- * @throws {TypeError} If amount is not an integer.
- */
-export function formatCurrency(
-  amount: number,
-  currencySymbol: string = '$'
-): string {
-  if (typeof amount !== 'number' || !Number.isInteger(amount)) {
-    throw new TypeError(
-      `Amount must be an integer representing minor units, got ${typeof amount === 'number' ? amount : typeof amount}`
-    );
-  }
-
-  const isNegative = amount < 0;
-  const absAmount = Math.abs(amount);
-
-  const dollars = Math.floor(absAmount / 100);
-  const cents = absAmount % 100;
-
-  const dollarsFormatted = dollars.toLocaleString('en-US');
-  const centsFormatted = cents.toString().padStart(2, '0');
-
-  const formatted = `${currencySymbol}${dollarsFormatted}.${centsFormatted}`;
-  return isNegative ? `-${formatted}` : formatted;
-}
-
-/**
- * Options for formatDate utility.
- */
 export interface FormatDateOptions extends Intl.DateTimeFormatOptions {
-  /**
-   * Fallback string to return if input date is null, undefined, empty, or invalid.
-   * @default ''
-   */
-  fallback?: string;
-
-  /**
-   * Locale identifier to format the date for (e.g. 'en-US', 'de-DE').
-   * If omitted, uses system/browser default locale.
-   */
   locale?: string;
-
-  /**
-   * Whether to include time in the default formatted output.
-   * Ignored if explicit formatting options (e.g. year, month, dateStyle) are provided.
-   * @default false
-   */
-  includeTime?: boolean;
 }
 
 /**
- * Formats a UTC datetime (ISO string, Date object, or timestamp) into a local timezone string.
+ * Formats a UTC datetime string (or Date object) into a localized timezone display string.
  *
- * Converts UTC inputs into human-readable strings according to the target timezone
- * (defaults to local runtime timezone if not specified in options).
- *
- * @param value - UTC datetime ISO string, Date instance, timestamp number, null, or undefined.
- * @param options - Formatting options including fallback, locale, includeTime, and Intl.DateTimeFormatOptions.
- * @returns Formatted date string or fallback string if input is nullish/invalid.
+ * @param utcDate - UTC ISO 8601 date string, Date object, or null/undefined
+ * @param options - Optional Intl.DateTimeFormatOptions (plus optional locale)
+ * @returns Formatted local date/time string, or empty string for invalid/null inputs
  */
 export function formatDate(
-  value: string | Date | number | null | undefined,
+  utcDate: string | Date | null | undefined,
   options?: FormatDateOptions
 ): string {
-  if (value === null || value === undefined || value === '') {
-    return options?.fallback ?? '';
+  if (!utcDate) {
+    return '';
   }
 
-  let date: Date;
+  let dateObj: Date;
 
-  if (value instanceof Date) {
-    date = new Date(value.getTime());
-  } else if (typeof value === 'number') {
-    date = new Date(value);
-  } else if (typeof value === 'string') {
-    let dateStr = value.trim();
-    if (dateStr === '') {
-      return options?.fallback ?? '';
+  if (utcDate instanceof Date) {
+    dateObj = utcDate;
+  } else if (typeof utcDate === 'string') {
+    const trimmed = utcDate.trim();
+    if (!trimmed) {
+      return '';
     }
 
-    const hasTimezone = /[Zz]|[+-]\d{2}:?\d{2}$/.test(dateStr);
-    if (!hasTimezone && /^\d{4}-\d{2}-\d{2}(T|\s)/.test(dateStr)) {
-      dateStr = dateStr.replace(' ', 'T') + 'Z';
+    // If ISO datetime string has time component but no timezone offset/Z suffix, append 'Z' to treat as UTC
+    let isoString = trimmed;
+    if (
+      trimmed.includes('T') &&
+      !trimmed.endsWith('Z') &&
+      !trimmed.endsWith('z') &&
+      !/[+-]\d{2}:?\d{2}$/.test(trimmed)
+    ) {
+      isoString = `${trimmed}Z`;
     }
 
-    date = new Date(dateStr);
+    dateObj = new Date(isoString);
   } else {
-    return options?.fallback ?? '';
+    return '';
   }
 
-  if (isNaN(date.getTime())) {
-    return options?.fallback ?? '';
+  if (isNaN(dateObj.getTime())) {
+    return '';
   }
 
-  const { fallback, locale, includeTime, ...dateTimeFormatOptions } =
-    options ?? {};
+  const { locale = 'en-US', ...dateTimeOptions } = options || {};
 
-  const hasFormatOption = Boolean(
-    dateTimeFormatOptions.dateStyle ||
-      dateTimeFormatOptions.timeStyle ||
-      dateTimeFormatOptions.year ||
-      dateTimeFormatOptions.month ||
-      dateTimeFormatOptions.day ||
-      dateTimeFormatOptions.weekday ||
-      dateTimeFormatOptions.hour ||
-      dateTimeFormatOptions.minute ||
-      dateTimeFormatOptions.second ||
-      dateTimeFormatOptions.timeZoneName ||
-      dateTimeFormatOptions.era ||
-      dateTimeFormatOptions.dayPeriod
-  );
+  const defaultOptions: Intl.DateTimeFormatOptions = {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  };
 
-  let finalOptions: Intl.DateTimeFormatOptions;
+  const finalOptions =
+    Object.keys(dateTimeOptions).length > 0 ? dateTimeOptions : defaultOptions;
 
-  if (!hasFormatOption) {
-    if (includeTime) {
-      finalOptions = {
-        year: 'numeric',
-        month: 'short',
-        day: 'numeric',
-        hour: 'numeric',
-        minute: '2-digit',
-        ...dateTimeFormatOptions,
-      };
-    } else {
-      finalOptions = {
-        year: 'numeric',
-        month: 'short',
-        day: 'numeric',
-        ...dateTimeFormatOptions,
-      };
-    }
-  } else {
-    finalOptions = dateTimeFormatOptions;
+  try {
+    return new Intl.DateTimeFormat(locale, finalOptions).format(dateObj);
+  } catch {
+    return '';
+  }
+}
+
+/**
+ * Formats integer minor units (e.g., cents) into a currency string (e.g., "$1,234.56")
+ * without using floating-point arithmetic.
+ *
+ * @param amountInCents - Amount in integer minor units (e.g., 123456 for $1,234.56)
+ * @param currencySymbol - Currency symbol prefix (defaults to '$')
+ * @returns Formatted currency string
+ */
+export function formatCurrency(
+  amountInCents: number,
+  currencySymbol: string = '$'
+): string {
+  if (typeof amountInCents !== 'number' || !Number.isFinite(amountInCents)) {
+    return `${currencySymbol}0.00`;
   }
 
-  return new Intl.DateTimeFormat(locale, finalOptions).format(date);
+  const isNegative = amountInCents < 0;
+  const absCents = Math.abs(Math.trunc(amountInCents));
+
+  const dollars = Math.floor(absCents / 100);
+  const cents = absCents % 100;
+
+  const formattedDollars = dollars.toLocaleString('en-US');
+  const formattedCents = cents.toString().padStart(2, '0');
+
+  return `${isNegative ? '-' : ''}${currencySymbol}${formattedDollars}.${formattedCents}`;
 }

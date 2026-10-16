@@ -1,227 +1,98 @@
 'use client';
 
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { colors, radii, shadows, spacing, typography } from '../../lib/tokens';
-import {
-  interactionsApi,
-  companiesApi,
-  contactsApi,
-  leadsApi,
-  Interaction,
-  InteractionCreate,
-  InteractionUpdate,
-  InteractionQueryParams,
-  Company,
-  Contact,
-  Lead,
-} from '../../services/crm';
-import { DataTable, DataTableColumn } from '../../components/crm/DataTable';
+import { colors, rounded, shadows, spacing, typography } from '@/lib/tokens';
+import { formatDate } from '@/lib/format';
+import { DataTable, Column } from '@/components/crm/DataTable';
 import {
   InteractionForm,
   InteractionFormData,
   CompanyOption,
   ContactOption,
   LeadOption,
-  INTERACTION_TYPE_OPTIONS,
-} from '../../components/crm/InteractionForm';
-import { ConfirmationDialog } from '../../components/shared/ConfirmationDialog';
-import { Alert } from '../../components/shared/Alerts';
-import { StatusBadge } from '../../components/shared/StatusBadge';
-import { formatDate } from '../../lib/format';
+  DEFAULT_INTERACTION_TYPES,
+} from '@/components/crm/InteractionForm';
+import { StatusBadge } from '@/components/shared/StatusBadge';
+import { ConfirmationDialog } from '@/components/shared/ConfirmationDialog';
+import { ErrorAlert, SuccessAlert } from '@/components/shared/Alerts';
+import { LoadingState } from '@/components/shared/States';
+import {
+  getPaginatedInteractions,
+  getInteraction,
+  createInteraction,
+  updateInteraction,
+  deleteInteraction,
+  listCompanies,
+  listContacts,
+  listLeads,
+  InteractionRead,
+  CompanyRead,
+  ContactRead,
+  LeadRead,
+  CRMApiError,
+} from '@/services/crm';
 
-interface ModalProps {
-  isOpen: boolean;
-  onClose: () => void;
-  title: string;
-  children: React.ReactNode;
-  maxWidth?: string;
-  'data-testid'?: string;
-}
-
-const Modal: React.FC<ModalProps> = ({
-  isOpen,
-  onClose,
-  title,
-  children,
-  maxWidth = '640px',
-  'data-testid': testId = 'modal',
-}) => {
-  useEffect(() => {
-    if (!isOpen) return;
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        onClose();
-      }
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isOpen, onClose]);
-
-  useEffect(() => {
-    if (isOpen) {
-      const originalOverflow = document.body.style.overflow;
-      document.body.style.overflow = 'hidden';
-      return () => {
-        document.body.style.overflow = originalOverflow;
-      };
-    }
-  }, [isOpen]);
-
-  if (!isOpen) return null;
-
-  return (
-    <div
-      data-testid={testId}
-      onClick={(e) => {
-        if (e.target === e.currentTarget) onClose();
-      }}
-      style={{
-        position: 'fixed',
-        top: 0,
-        left: 0,
-        right: 0,
-        bottom: 0,
-        width: '100vw',
-        height: '100vh',
-        backgroundColor: 'rgba(27, 28, 25, 0.5)',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        zIndex: 1000,
-        padding: spacing[4],
-      }}
-    >
-      <div
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="modal-title"
-        style={{
-          backgroundColor: colors.surface.containerLowest,
-          borderRadius: radii.lg,
-          boxShadow: shadows.lifted,
-          border: `1px solid ${colors.surface.outlineVariant}`,
-          width: '100%',
-          maxWidth,
-          maxHeight: '90vh',
-          display: 'flex',
-          flexDirection: 'column',
-          overflow: 'hidden',
-        }}
-      >
-        <header
-          style={{
-            padding: `${spacing[4]} ${spacing[6]}`,
-            borderBottom: `1px solid ${colors.surface.outlineVariant}`,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-          }}
-        >
-          <h2
-            id="modal-title"
-            style={{
-              fontFamily: typography.styles.headlineSm.fontFamily,
-              fontSize: typography.styles.headlineSm.fontSize,
-              fontWeight: typography.styles.headlineSm.fontWeight,
-              color: colors.surface.onSurface,
-              margin: 0,
-            }}
-          >
-            {title}
-          </h2>
-          <button
-            onClick={onClose}
-            aria-label="Close modal"
-            style={{
-              background: 'none',
-              border: 'none',
-              fontSize: '18px',
-              fontWeight: 'bold',
-              color: colors.surface.onSurfaceVariant,
-              cursor: 'pointer',
-              padding: spacing[1],
-              lineHeight: 1,
-            }}
-          >
-            ✕
-          </button>
-        </header>
-        <div
-          style={{
-            padding: spacing[6],
-            overflowY: 'auto',
-            flex: 1,
-          }}
-        >
-          {children}
-        </div>
-      </div>
-    </div>
-  );
-};
-
+/**
+ * InteractionsPage Component
+ * Route segment for `/interactions`
+ * Displays a DataTable of interaction logs with search, sort, type filter, and pagination.
+ * Offers Add Interaction, Detail View, Edit Interaction, and Delete Interaction modals.
+ * Satisfies FR-5 (Interactions CRUD with associations), FR-10 (Breadcrumbs/Navigation), and FR-14 (Empty States).
+ */
 export default function InteractionsPage() {
-  const [interactions, setInteractions] = useState<Interaction[]>([]);
-  const [companies, setCompanies] = useState<Company[]>([]);
-  const [contacts, setContacts] = useState<Contact[]>([]);
-  const [leads, setLeads] = useState<Lead[]>([]);
+  // Data state
+  const [interactions, setInteractions] = useState<InteractionRead[]>([]);
+  const [totalItems, setTotalItems] = useState<number>(0);
+  const [page, setPage] = useState<number>(1);
+  const [pageSize, setPageSize] = useState<number>(20);
+  const [searchValue, setSearchValue] = useState<string>('');
+  const [typeFilter, setTypeFilter] = useState<string>('');
+  const [sortColumn, setSortColumn] = useState<string>('date');
+  const [sortDirection, setSortDirection] = useState<'asc' | 'desc' | null>('desc');
 
-  const [totalItems, setTotalItems] = useState(0);
-  const [page, setPage] = useState(1);
-  const [pageSize] = useState(20);
-  const [sortBy, setSortBy] = useState('date');
-  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');
-  const [searchQuery, setSearchQuery] = useState('');
-  const [typeFilter, setTypeFilter] = useState<string>('all');
+  // Company, Contact, and Lead options for dropdowns and lookup maps
+  const [companies, setCompanies] = useState<CompanyOption[]>([]);
+  const [contacts, setContacts] = useState<ContactOption[]>([]);
+  const [leads, setLeads] = useState<LeadOption[]>([]);
 
-  const [isLoading, setIsLoading] = useState(true);
-  const [pageError, setPageError] = useState<string | null>(null);
+  // Loading & error states
+  const [loading, setLoading] = useState<boolean>(true);
+  const [error, setError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
-  // Modal states
-  const [isAddModalOpen, setIsAddModalOpen] = useState(false);
-  const [editingInteraction, setEditingInteraction] = useState<Interaction | null>(null);
-  const [viewingInteraction, setViewingInteraction] = useState<Interaction | null>(null);
-  const [isDetailLoading, setIsDetailLoading] = useState(false);
+  // Modal & Selection states
+  const [isAddModalOpen, setIsAddModalOpen] = useState<boolean>(false);
+  const [isEditModalOpen, setIsEditModalOpen] = useState<boolean>(false);
+  const [isDetailModalOpen, setIsDetailModalOpen] = useState<boolean>(false);
+  const [isDeleteModalOpen, setIsDeleteModalOpen] = useState<boolean>(false);
 
-  // Deletion state
-  const [deletingInteraction, setDeletingInteraction] = useState<Interaction | null>(null);
-  const [deleteError, setDeleteError] = useState<string | null>(null);
-  const [isDeleting, setIsDeleting] = useState(false);
+  const [selectedInteraction, setSelectedInteraction] = useState<InteractionRead | null>(null);
+  const [interactionDetail, setInteractionDetail] = useState<InteractionRead | null>(null);
 
-  // Form submission state
-  const [isSubmitting, setIsSubmitting] = useState(false);
-  const [formServerError, setFormServerError] = useState<string | null>(null);
-  const [formFieldErrors, setFormFieldErrors] = useState<Record<string, string>>({});
+  const [isDetailLoading, setIsDetailLoading] = useState<boolean>(false);
+  const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
+  const [isDeleting, setIsDeleting] = useState<boolean>(false);
+  const [formApiError, setFormApiError] = useState<CRMApiError | string | null>(null);
 
-  const companyOptions: CompanyOption[] = useMemo(() => {
-    return companies.map((c) => ({ id: c.id, name: c.name }));
-  }, [companies]);
-
-  const contactOptions: ContactOption[] = useMemo(() => {
-    return contacts.map((c) => ({ id: c.id, name: c.name }));
-  }, [contacts]);
-
-  const leadOptions: LeadOption[] = useMemo(() => {
-    return leads.map((l) => ({ id: l.id, title: l.title || l.name, name: l.title || l.name }));
-  }, [leads]);
-
+  // Map of company ID to company name for fast lookup
   const companyMap = useMemo(() => {
     const map: Record<number, string> = {};
-    companies.forEach((c) => {
-      map[c.id] = c.name;
+    companies.forEach((comp) => {
+      map[comp.id] = comp.name;
     });
     return map;
   }, [companies]);
 
+  // Map of contact ID to contact name for fast lookup
   const contactMap = useMemo(() => {
     const map: Record<number, string> = {};
-    contacts.forEach((c) => {
-      map[c.id] = c.name;
+    contacts.forEach((cont) => {
+      map[cont.id] = cont.name;
     });
     return map;
   }, [contacts]);
 
+  // Map of lead ID to lead title for fast lookup
   const leadMap = useMemo(() => {
     const map: Record<number, string> = {};
     leads.forEach((l) => {
@@ -230,93 +101,47 @@ export default function InteractionsPage() {
     return map;
   }, [leads]);
 
+  // Fetch company options for dropdown and display
   const fetchCompanies = useCallback(async () => {
     try {
-      const response = await companiesApi.list({ page: 1, page_size: 100 });
-      if (response.data) {
-        if ('items' in response.data && Array.isArray(response.data.items)) {
-          setCompanies(response.data.items);
-        } else if (Array.isArray(response.data)) {
-          setCompanies(response.data);
-        }
+      const companyList: CompanyRead[] = await listCompanies({ page_size: 1000 });
+      if (Array.isArray(companyList)) {
+        setCompanies(companyList.map((c) => ({ id: c.id, name: c.name })));
       }
     } catch {
-      // Ignore company fetch errors
+      // Non-critical background fetch failure for company list
     }
   }, []);
 
+  // Fetch contact options for dropdown and display
   const fetchContacts = useCallback(async () => {
     try {
-      const response = await contactsApi.list({ page: 1, page_size: 100 });
-      if (response.data) {
-        if ('items' in response.data && Array.isArray(response.data.items)) {
-          setContacts(response.data.items);
-        } else if (Array.isArray(response.data)) {
-          setContacts(response.data);
-        }
+      const contactList: ContactRead[] = await listContacts({ page_size: 1000 });
+      if (Array.isArray(contactList)) {
+        setContacts(contactList.map((c) => ({ id: c.id, name: c.name })));
       }
     } catch {
-      // Ignore contact fetch errors
+      // Non-critical background fetch failure for contact list
     }
   }, []);
 
+  // Fetch lead options for dropdown and display
   const fetchLeads = useCallback(async () => {
     try {
-      const response = await leadsApi.list({ page: 1, page_size: 100 });
-      if (response.data) {
-        if ('items' in response.data && Array.isArray(response.data.items)) {
-          setLeads(response.data.items);
-        } else if (Array.isArray(response.data)) {
-          setLeads(response.data);
-        }
+      const leadList: LeadRead[] = await listLeads({ page_size: 1000 });
+      if (Array.isArray(leadList)) {
+        setLeads(
+          leadList.map((l) => ({
+            id: l.id,
+            title: l.title || l.name || `Lead #${l.id}`,
+            name: l.name || l.title || `Lead #${l.id}`,
+          }))
+        );
       }
     } catch {
-      // Ignore lead fetch errors
+      // Non-critical background fetch failure for lead list
     }
   }, []);
-
-  const fetchInteractions = useCallback(async () => {
-    setIsLoading(true);
-    setPageError(null);
-    try {
-      const params: InteractionQueryParams & Record<string, any> = {
-        page,
-        page_size: pageSize,
-        sort_by: sortBy,
-        order: sortOrder,
-      };
-      if (searchQuery.trim()) {
-        params.search = searchQuery.trim();
-      }
-      if (typeFilter && typeFilter !== 'all') {
-        params.type_filter = typeFilter;
-        params.type = typeFilter;
-      }
-
-      const response = await interactionsApi.list(params as any);
-      if (response.error) {
-        setPageError(
-          typeof response.error === 'string' ? response.error : 'Failed to load interactions'
-        );
-        setInteractions([]);
-        setTotalItems(0);
-      } else if (response.data) {
-        if ('items' in response.data && Array.isArray(response.data.items)) {
-          setInteractions(response.data.items as Interaction[]);
-          setTotalItems(response.data.total ?? response.data.items.length);
-        } else if (Array.isArray(response.data)) {
-          setInteractions(response.data as Interaction[]);
-          setTotalItems(response.data.length);
-        }
-      }
-    } catch (err) {
-      setPageError(
-        err instanceof Error ? err.message : 'An unexpected error occurred while loading interactions.'
-      );
-    } finally {
-      setIsLoading(false);
-    }
-  }, [page, pageSize, sortBy, sortOrder, searchQuery, typeFilter]);
 
   useEffect(() => {
     fetchCompanies();
@@ -324,421 +149,475 @@ export default function InteractionsPage() {
     fetchLeads();
   }, [fetchCompanies, fetchContacts, fetchLeads]);
 
+  // Fetch paginated interactions list
+  const fetchInteractions = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const sortParam = sortColumn
+        ? sortDirection === 'desc'
+          ? `-${sortColumn}`
+          : sortColumn
+        : undefined;
+
+      const response = await getPaginatedInteractions({
+        page,
+        page_size: pageSize,
+        search: searchValue || undefined,
+        sort: sortParam,
+        type: typeFilter || undefined,
+      });
+
+      setInteractions(response.items || []);
+      setTotalItems(response.total ?? (response.items ? response.items.length : 0));
+    } catch (err: unknown) {
+      if (err instanceof CRMApiError) {
+        setError(err.message);
+      } else if (err instanceof Error) {
+        setError(err.message);
+      } else {
+        setError('Failed to load interactions.');
+      }
+    } finally {
+      setLoading(false);
+    }
+  }, [page, pageSize, searchValue, typeFilter, sortColumn, sortDirection]);
+
   useEffect(() => {
     fetchInteractions();
   }, [fetchInteractions]);
 
-  const handleViewInteraction = async (interaction: Interaction) => {
+  // Modal control helpers
+  const handleOpenAddModal = () => {
+    setFormApiError(null);
+    setIsAddModalOpen(true);
+  };
+
+  const handleCloseAddModal = () => {
+    setIsAddModalOpen(false);
+    setFormApiError(null);
+  };
+
+  const handleOpenEditModal = (interaction: InteractionRead) => {
+    setSelectedInteraction(interaction);
+    setFormApiError(null);
+    setIsEditModalOpen(true);
+  };
+
+  const handleCloseEditModal = () => {
+    setIsEditModalOpen(false);
+    setSelectedInteraction(null);
+    setFormApiError(null);
+  };
+
+  const handleOpenDetailModal = async (interaction: InteractionRead) => {
+    setSelectedInteraction(interaction);
+    setInteractionDetail(interaction);
+    setIsDetailModalOpen(true);
     setIsDetailLoading(true);
-    setViewingInteraction(interaction);
+
     try {
-      const response = await interactionsApi.get(interaction.id);
-      if (response.data) {
-        setViewingInteraction(response.data as Interaction);
-      }
+      const detail = await getInteraction(interaction.id);
+      setInteractionDetail(detail);
     } catch {
-      // Retain existing interaction object if detail fetch fails
+      // Fallback to initial selectedInteraction if detailed fetch fails
     } finally {
       setIsDetailLoading(false);
     }
   };
 
-  const handleCreateInteraction = async (formData: InteractionFormData) => {
+  const handleCloseDetailModal = () => {
+    setIsDetailModalOpen(false);
+    setSelectedInteraction(null);
+    setInteractionDetail(null);
+  };
+
+  const handleOpenDeleteModal = (interaction: InteractionRead) => {
+    setSelectedInteraction(interaction);
+    setIsDeleteModalOpen(true);
+  };
+
+  const handleCloseDeleteModal = () => {
+    setIsDeleteModalOpen(false);
+    setSelectedInteraction(null);
+  };
+
+  // Form submit handlers
+  const handleCreateInteraction = async (data: InteractionFormData) => {
     setIsSubmitting(true);
-    setFormServerError(null);
-    setFormFieldErrors({});
-    setSuccessMessage(null);
-
-    const summaryText = formData.summary || formData.notes || '';
-    const dateVal = formData.date || new Date().toISOString();
-
-    const payload: InteractionCreate = {
-      date: dateVal,
-      timestamp: dateVal,
-      type: formData.type || 'note',
-      summary: summaryText,
-      notes: summaryText,
-      company_id: formData.company_id ?? null,
-      contact_id: formData.contact_id ?? null,
-      lead_id: formData.lead_id ?? null,
-      owner: formData.owner || '',
-    };
-
+    setFormApiError(null);
     try {
-      const response = await interactionsApi.create(payload);
-      if (response.error) {
-        const errObj = response.error as any;
-        if (typeof errObj === 'object' && errObj !== null) {
-          setFormServerError(errObj.message || 'Failed to create interaction.');
-          if (Array.isArray(errObj.fields)) {
-            const fieldMap: Record<string, string> = {};
-            errObj.fields.forEach((f: { field: string; message: string }) => {
-              fieldMap[f.field] = f.message;
-            });
-            setFormFieldErrors(fieldMap);
-          }
-        } else if (typeof response.error === 'string') {
-          setFormServerError(response.error);
-        } else {
-          setFormServerError('Failed to create interaction.');
-        }
+      await createInteraction(data);
+      const displaySummary = data.summary || `${data.type} interaction`;
+      setSuccessMessage(`Interaction "${displaySummary.trim()}" logged successfully.`);
+      handleCloseAddModal();
+      fetchInteractions();
+    } catch (err: unknown) {
+      if (err instanceof CRMApiError) {
+        setFormApiError(err);
+      } else if (err instanceof Error) {
+        setFormApiError(err.message);
       } else {
-        setIsAddModalOpen(false);
-        setSuccessMessage('Interaction created successfully.');
-        fetchInteractions();
+        setFormApiError('Failed to log interaction.');
       }
-    } catch (err) {
-      setFormServerError(
-        err instanceof Error ? err.message : 'An error occurred while saving interaction.'
-      );
     } finally {
       setIsSubmitting(false);
     }
   };
 
-  const handleUpdateInteraction = async (formData: InteractionFormData) => {
-    if (!editingInteraction) return;
+  const handleUpdateInteraction = async (data: InteractionFormData) => {
+    if (!selectedInteraction) return;
     setIsSubmitting(true);
-    setFormServerError(null);
-    setFormFieldErrors({});
-    setSuccessMessage(null);
-
-    const summaryText = formData.summary || formData.notes || '';
-    const dateVal = formData.date || new Date().toISOString();
-
-    const payload: InteractionUpdate = {
-      date: dateVal,
-      timestamp: dateVal,
-      type: formData.type || 'note',
-      summary: summaryText,
-      notes: summaryText,
-      company_id: formData.company_id ?? null,
-      contact_id: formData.contact_id ?? null,
-      lead_id: formData.lead_id ?? null,
-      owner: formData.owner || '',
-    };
-
+    setFormApiError(null);
     try {
-      const response = await interactionsApi.update(editingInteraction.id, payload);
-      if (response.error) {
-        const errObj = response.error as any;
-        if (typeof errObj === 'object' && errObj !== null) {
-          setFormServerError(errObj.message || 'Failed to update interaction.');
-          if (Array.isArray(errObj.fields)) {
-            const fieldMap: Record<string, string> = {};
-            errObj.fields.forEach((f: { field: string; message: string }) => {
-              fieldMap[f.field] = f.message;
-            });
-            setFormFieldErrors(fieldMap);
-          }
-        } else if (typeof response.error === 'string') {
-          setFormServerError(response.error);
-        } else {
-          setFormServerError('Failed to update interaction.');
-        }
+      await updateInteraction(selectedInteraction.id, data);
+      const displaySummary = data.summary || selectedInteraction.summary || 'Interaction';
+      setSuccessMessage(`Interaction "${displaySummary.trim()}" updated successfully.`);
+      handleCloseEditModal();
+      fetchInteractions();
+    } catch (err: unknown) {
+      if (err instanceof CRMApiError) {
+        setFormApiError(err);
+      } else if (err instanceof Error) {
+        setFormApiError(err.message);
       } else {
-        setEditingInteraction(null);
-        setSuccessMessage('Interaction updated successfully.');
-        if (viewingInteraction?.id === editingInteraction.id) {
-          setViewingInteraction(response.data as Interaction || null);
-        }
-        fetchInteractions();
+        setFormApiError('Failed to update interaction.');
       }
-    } catch (err) {
-      setFormServerError(
-        err instanceof Error ? err.message : 'An error occurred while updating interaction.'
-      );
     } finally {
       setIsSubmitting(false);
     }
   };
 
   const handleDeleteInteraction = async () => {
-    if (!deletingInteraction) return;
+    if (!selectedInteraction) return;
     setIsDeleting(true);
-    setDeleteError(null);
     try {
-      const response = await interactionsApi.delete(deletingInteraction.id);
-      if (response.error) {
-        const errObj = response.error as any;
-        setDeleteError(
-          typeof response.error === 'string'
-            ? response.error
-            : errObj?.message || 'Failed to delete interaction record.'
-        );
+      await deleteInteraction(selectedInteraction.id);
+      const displaySummary = selectedInteraction.summary || `Interaction #${selectedInteraction.id}`;
+      setSuccessMessage(`Interaction "${displaySummary.trim()}" deleted successfully.`);
+      handleCloseDeleteModal();
+      fetchInteractions();
+    } catch (err: unknown) {
+      if (err instanceof CRMApiError) {
+        setError(`Failed to delete interaction: ${err.message}`);
+      } else if (err instanceof Error) {
+        setError(`Failed to delete interaction: ${err.message}`);
       } else {
-        setDeletingInteraction(null);
-        if (viewingInteraction?.id === deletingInteraction.id) {
-          setViewingInteraction(null);
-        }
-        setSuccessMessage('Interaction deleted successfully.');
-        fetchInteractions();
+        setError('Failed to delete interaction.');
       }
-    } catch (err) {
-      setDeleteError(
-        err instanceof Error ? err.message : 'An error occurred while deleting interaction.'
-      );
+      handleCloseDeleteModal();
     } finally {
       setIsDeleting(false);
     }
   };
 
-  const columns: DataTableColumn<Interaction>[] = [
-    {
-      key: 'type',
-      header: 'Type',
-      sortable: true,
-      sortField: 'type',
-      accessor: (item) => {
-        const typeVal = item.type || 'note';
-        const typeLabel =
-          INTERACTION_TYPE_OPTIONS.find((t) => t.value === typeVal)?.label ||
-          typeVal.charAt(0).toUpperCase() + typeVal.slice(1);
-
-        return <StatusBadge status={typeVal} label={typeLabel} size="sm" />;
-      },
-    },
-    {
-      key: 'summary',
-      header: 'Summary / Notes',
-      sortable: true,
-      sortField: 'summary',
-      accessor: (item) => {
-        const text = item.summary || item.notes || `Interaction #${item.id}`;
-        return (
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              handleViewInteraction(item);
-            }}
-            data-testid={`interaction-summary-link-${item.id}`}
-            style={{
-              background: 'none',
-              border: 'none',
-              padding: 0,
-              color: colors.accent.primary,
-              fontFamily: typography.styles.bodyMd.fontFamily,
-              fontSize: typography.styles.bodyMd.fontSize,
-              fontWeight: 600,
-              cursor: 'pointer',
-              textAlign: 'left',
-              textDecoration: 'underline',
-            }}
-          >
-            {text}
-          </button>
-        );
-      },
-    },
-    {
-      key: 'date',
-      header: 'Date',
-      sortable: true,
-      sortField: 'date',
-      accessor: (item) => formatDate(item.date || item.timestamp || item.created_at),
-    },
-    {
-      key: 'association',
-      header: 'Related To',
-      sortable: false,
-      accessor: (item) => {
-        if (item.company_id && companyMap[item.company_id]) {
-          return (
-            <span style={{ fontSize: typography.styles.caption.fontSize }}>
-              Company: {companyMap[item.company_id]}
-            </span>
-          );
-        }
-        if (item.contact_id && contactMap[item.contact_id]) {
-          return (
-            <span style={{ fontSize: typography.styles.caption.fontSize }}>
-              Contact: {contactMap[item.contact_id]}
-            </span>
-          );
-        }
-        if (item.lead_id && leadMap[item.lead_id]) {
-          return (
-            <span style={{ fontSize: typography.styles.caption.fontSize }}>
-              Lead: {leadMap[item.lead_id]}
-            </span>
-          );
-        }
-        return (
-          <span style={{ color: colors.surface.onSurfaceVariant, fontSize: typography.styles.caption.fontSize }}>
-            Unassigned
-          </span>
-        );
-      },
-    },
-    {
-      key: 'actions',
-      header: 'Actions',
-      align: 'right',
-      accessor: (item) => (
-        <div
-          style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: spacing[2] }}
-          onClick={(e) => e.stopPropagation()}
-        >
-          <button
-            onClick={() => handleViewInteraction(item)}
-            data-testid={`view-interaction-${item.id}`}
-            style={{
-              background: 'none',
-              border: `1px solid ${colors.surface.outlineVariant}`,
-              borderRadius: radii.sm,
-              padding: `${spacing[1]} ${spacing[2]}`,
-              fontSize: typography.styles.caption.fontSize,
-              color: colors.surface.onSurface,
-              cursor: 'pointer',
-            }}
-          >
-            View
-          </button>
-          <button
-            onClick={() => {
-              setEditingInteraction(item);
-              setFormServerError(null);
-              setFormFieldErrors({});
-            }}
-            data-testid={`edit-interaction-${item.id}`}
-            style={{
-              background: 'none',
-              border: `1px solid ${colors.surface.outlineVariant}`,
-              borderRadius: radii.sm,
-              padding: `${spacing[1]} ${spacing[2]}`,
-              fontSize: typography.styles.caption.fontSize,
-              color: colors.surface.onSurface,
-              cursor: 'pointer',
-            }}
-          >
-            Edit
-          </button>
-          <button
-            onClick={() => {
-              setDeletingInteraction(item);
-              setDeleteError(null);
-            }}
-            data-testid={`delete-interaction-${item.id}`}
-            style={{
-              background: 'none',
-              border: `1px solid ${colors.accent.secondary}`,
-              borderRadius: radii.sm,
-              padding: `${spacing[1]} ${spacing[2]}`,
-              fontSize: typography.styles.caption.fontSize,
-              color: colors.accent.secondary,
-              cursor: 'pointer',
-            }}
-          >
-            Delete
-          </button>
-        </div>
-      ),
-    },
-  ];
-
-  const extraToolbar = (
-    <div style={{ display: 'flex', alignItems: 'center', gap: spacing[2] }}>
+  // Type Filter Control element
+  const typeFilterControl = (
+    <div style={{ display: 'flex', alignItems: 'center', gap: spacing.xs }}>
       <label
-        htmlFor="type-filter"
+        htmlFor="type-filter-select"
         style={{
-          fontSize: typography.styles.caption.fontSize,
+          fontSize: typography.sizes.caption.fontSize,
           fontWeight: 500,
           color: colors.surface.onSurfaceVariant,
         }}
       >
-        Type:
+        Filter Type:
       </label>
       <select
-        id="type-filter"
+        id="type-filter-select"
         value={typeFilter}
+        aria-label="Filter interactions by type"
         onChange={(e) => {
           setTypeFilter(e.target.value);
           setPage(1);
         }}
-        data-testid="type-filter-select"
         style={{
-          padding: `${spacing[1]} ${spacing[3]}`,
-          borderRadius: radii.md,
-          border: `1px solid ${colors.surface.outlineVariant}`,
+          padding: `${spacing.xs} ${spacing.sm}`,
+          borderRadius: rounded.sm,
+          border: `1px solid ${colors.borderVariant}`,
           backgroundColor: colors.surface.containerLowest,
           color: colors.surface.onSurface,
-          fontSize: typography.styles.caption.fontSize,
-          cursor: 'pointer',
+          fontSize: typography.sizes.caption.fontSize,
         }}
       >
-        <option value="all">All Types</option>
-        {INTERACTION_TYPE_OPTIONS.map((opt) => (
-          <option key={opt.value} value={opt.value}>
-            {opt.label}
+        <option value="">All Types</option>
+        {DEFAULT_INTERACTION_TYPES.map((t) => (
+          <option key={t} value={t}>
+            {t.charAt(0).toUpperCase() + t.slice(1)}
           </option>
         ))}
       </select>
     </div>
   );
 
+  // Helper to render type badge variant
+  const getTypeBadgeVariant = (type: string) => {
+    switch (type.toLowerCase()) {
+      case 'call':
+        return 'info';
+      case 'email':
+        return 'primary';
+      case 'meeting':
+        return 'success';
+      case 'note':
+        return 'warning';
+      default:
+        return 'neutral';
+    }
+  };
+
+  // DataTable Column Definitions
+  const columns: Column<InteractionRead>[] = [
+  {
+    key: 'type',
+    header: 'Type',
+    sortable: true,
+    sortField: 'type',
+    render: (interaction) => {
+      const typeStr = interaction.type || 'note';
+      const formattedLabel =
+        typeStr.charAt(0).toUpperCase() + typeStr.slice(1);
+
+      return (
+        <StatusBadge
+          label={formattedLabel}
+          status={typeStr}
+          variant={
+            getTypeBadgeVariant(typeStr) as
+              | 'info'
+              | 'success'
+              | 'warning'
+              | 'neutral'
+          }
+        />
+      );
+    },
+  },
+    {
+      key: 'summary',
+      header: 'Summary',
+      sortable: true,
+      sortField: 'summary',
+      render: (interaction) => (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+          <span style={{ fontWeight: 500, color: colors.surface.onSurface }}>
+            {interaction.summary}
+          </span>
+          {interaction.notes && (
+            <span
+              style={{
+                fontSize: typography.sizes.caption.fontSize,
+                color: colors.surface.onSurfaceVariant,
+                whiteSpace: 'nowrap',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                maxWidth: '250px',
+              }}
+            >
+              {interaction.notes}
+            </span>
+          )}
+        </div>
+      ),
+    },
+    {
+      key: 'date',
+      header: 'Date',
+      sortable: true,
+      sortField: 'date',
+      render: (interaction) => {
+        const rawDate = interaction.date || interaction.interaction_date || interaction.timestamp;
+        return formatDate(rawDate) || '—';
+      },
+    },
+    {
+      key: 'company_id',
+      header: 'Company',
+      render: (interaction) => {
+        if (!interaction.company_id) return '—';
+        const companyName = companyMap[interaction.company_id];
+        return companyName || `Company #${interaction.company_id}`;
+      },
+    },
+    {
+      key: 'contact_id',
+      header: 'Contact',
+      render: (interaction) => {
+        if (!interaction.contact_id) return '—';
+        const contactName = contactMap[interaction.contact_id];
+        return contactName || `Contact #${interaction.contact_id}`;
+      },
+    },
+    {
+      key: 'lead_id',
+      header: 'Lead',
+      render: (interaction) => {
+        if (!interaction.lead_id) return '—';
+        const leadTitle = leadMap[interaction.lead_id];
+        return leadTitle || `Lead #${interaction.lead_id}`;
+      },
+    },
+    {
+      key: 'owner',
+      header: 'Owner',
+      sortable: true,
+      sortField: 'owner',
+      render: (interaction) => interaction.owner || '—',
+    },
+    {
+      key: 'actions',
+      header: 'Actions',
+      align: 'right',
+      render: (interaction) => {
+        const displaySummary = interaction.summary || `Interaction #${interaction.id}`;
+        return (
+          <div
+            style={{ display: 'flex', gap: spacing.xs, justifyContent: 'flex-end', alignItems: 'center' }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <button
+              type="button"
+              onClick={() => handleOpenDetailModal(interaction)}
+              style={{
+                padding: `${spacing.xs} ${spacing.sm}`,
+                borderRadius: rounded.sm,
+                border: `1px solid ${colors.borderVariant}`,
+                backgroundColor: 'transparent',
+                color: colors.surface.onSurface,
+                fontSize: '13px',
+                cursor: 'pointer',
+              }}
+              aria-label={`View details for ${displaySummary}`}
+            >
+              View
+            </button>
+            <button
+              type="button"
+              onClick={() => handleOpenEditModal(interaction)}
+              style={{
+                padding: `${spacing.xs} ${spacing.sm}`,
+                borderRadius: rounded.sm,
+                border: `1px solid ${colors.borderVariant}`,
+                backgroundColor: 'transparent',
+                color: colors.surface.onSurface,
+                fontSize: '13px',
+                cursor: 'pointer',
+              }}
+              aria-label={`Edit ${displaySummary}`}
+            >
+              Edit
+            </button>
+            <button
+              type="button"
+              onClick={() => handleOpenDeleteModal(interaction)}
+              style={{
+                padding: `${spacing.xs} ${spacing.sm}`,
+                borderRadius: rounded.sm,
+                border: `1px solid ${colors.semantic.errorBorder}`,
+                backgroundColor: 'transparent',
+                color: colors.semantic.error,
+                fontSize: '13px',
+                cursor: 'pointer',
+              }}
+              aria-label={`Delete ${displaySummary}`}
+            >
+              Delete
+            </button>
+          </div>
+        );
+      },
+    },
+  ];
+
   return (
-    <div
-      style={{
-        maxWidth: '1200px',
-        margin: '0 auto',
-        padding: `${spacing[6]} ${spacing[4]}`,
-        display: 'flex',
-        flexDirection: 'column',
-        gap: spacing[6],
-      }}
+    <section
+      aria-label="Interactions Management"
+      style={{ display: 'flex', flexDirection: 'column', gap: spacing.lg }}
     >
-      {/* Top Header */}
+      {/* Breadcrumbs Navigation (FR-10) */}
+      <nav aria-label="Breadcrumb" style={{ marginBottom: `-${spacing.sm}` }}>
+        <ol
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: spacing.xs,
+            listStyle: 'none',
+            margin: 0,
+            padding: 0,
+            fontSize: typography.sizes.caption.fontSize,
+            color: colors.surface.onSurfaceVariant,
+          }}
+        >
+          <li>
+            <a
+              href="/"
+              style={{
+                color: colors.accent.DEFAULT,
+                textDecoration: 'none',
+              }}
+            >
+              Dashboard
+            </a>
+          </li>
+          <li aria-hidden="true" style={{ color: colors.grays[400] }}>
+            /
+          </li>
+          <li
+            aria-current="page"
+            style={{ fontWeight: 500, color: colors.surface.onSurface }}
+          >
+            Interactions
+          </li>
+        </ol>
+      </nav>
+
+      {/* Page Header */}
       <div
         style={{
           display: 'flex',
-          flexWrap: 'wrap',
-          alignItems: 'center',
           justifyContent: 'space-between',
-          gap: spacing[4],
-          borderBottom: `1px solid ${colors.surface.outlineVariant}`,
-          paddingBottom: spacing[4],
+          alignItems: 'flex-start',
+          flexWrap: 'wrap',
+          gap: spacing.md,
         }}
       >
         <div>
           <h1
             style={{
-              fontFamily: typography.styles.displayLg.fontFamily,
-              fontSize: typography.styles.headlineMd.fontSize,
-              fontWeight: typography.styles.headlineMd.fontWeight,
+              fontSize: typography.sizes['headline-sm'].fontSize,
+              fontWeight: typography.sizes['headline-sm'].fontWeight,
               color: colors.surface.onSurface,
-              margin: `0 0 ${spacing[1]} 0`,
+              margin: 0,
             }}
           >
             Interactions
           </h1>
           <p
             style={{
-              fontFamily: typography.styles.bodyMd.fontFamily,
-              fontSize: typography.styles.bodyMd.fontSize,
+              fontSize: typography.sizes.body.fontSize,
               color: colors.surface.onSurfaceVariant,
-              margin: 0,
+              margin: `${spacing.xs} 0 0 0`,
             }}
           >
-            Record and view calls, emails, meetings, and notes for companies, contacts, and leads.
+            Track activity logs, meetings, calls, emails, and notes linked to companies, contacts, and leads.
           </p>
         </div>
 
         <button
-          onClick={() => {
-            setIsAddModalOpen(true);
-            setFormServerError(null);
-            setFormFieldErrors({});
-          }}
-          data-testid="add-interaction-button"
+          type="button"
+          onClick={handleOpenAddModal}
           style={{
-            backgroundColor: colors.accent.primary,
-            color: '#ffffff',
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: spacing.xs,
+            padding: `${spacing.sm} ${spacing.lg}`,
+            backgroundColor: colors.accent.DEFAULT,
+            color: colors.accent.onAccent,
             border: 'none',
-            borderRadius: radii.md,
-            padding: `${spacing[2]} ${spacing[4]}`,
-            fontFamily: typography.styles.labelCaps.fontFamily,
-            fontSize: typography.styles.bodyMd.fontSize,
-            fontWeight: 600,
+            borderRadius: rounded.md,
+            fontSize: typography.sizes.body.fontSize,
+            fontWeight: 500,
             cursor: 'pointer',
             boxShadow: shadows.sm,
           }}
@@ -747,291 +626,487 @@ export default function InteractionsPage() {
         </button>
       </div>
 
-      {/* Alert Banners */}
+      {/* Feedback Alerts */}
+      {error && <ErrorAlert message={error} onClose={() => setError(null)} />}
       {successMessage && (
-        <Alert
-          variant="success"
-          message={successMessage}
-          onClose={() => setSuccessMessage(null)}
-          data-testid="interactions-success-alert"
-        />
-      )}
-      {pageError && (
-        <Alert
-          variant="error"
-          message={pageError}
-          onClose={() => setPageError(null)}
-          data-testid="interactions-error-alert"
-        />
+        <SuccessAlert message={successMessage} onClose={() => setSuccessMessage(null)} />
       )}
 
-      {/* Data Table */}
+      {/* Main Data Table */}
       <DataTable
-        data={interactions}
         columns={columns}
-        keyExtractor={(item) => item.id}
+        data={interactions}
         totalItems={totalItems}
-        page={page}
-        pageSize={pageSize}
-        onPageChange={(newPage) => setPage(newPage)}
-        sortBy={sortBy}
-        sortOrder={sortOrder}
-        onSortChange={(field, order) => {
-          setSortBy(field);
-          setSortOrder(order);
-        }}
-        searchQuery={searchQuery}
-        onSearchChange={(query) => {
-          setSearchQuery(query);
+        loading={loading}
+        searchValue={searchValue}
+        searchPlaceholder="Search interactions by summary, owner..."
+        onSearchChange={(val) => {
+          setSearchValue(val);
           setPage(1);
         }}
-        searchPlaceholder="Search interactions by summary..."
-        isLoading={isLoading}
-        emptyTitle="No interactions found"
-        emptyDescription="Get started by logging your first customer interaction or note."
-        onAdd={() => {
-          setIsAddModalOpen(true);
-          setFormServerError(null);
-          setFormFieldErrors({});
+        sortColumn={sortColumn}
+        sortDirection={sortDirection}
+        onSortChange={(col, dir) => {
+          setSortColumn(col);
+          setSortDirection(dir);
         }}
-        addLabel="Add Interaction"
-        extraToolbar={extraToolbar}
-        onRowClick={(item) => handleViewInteraction(item)}
-        data-testid="interactions-table"
+        page={page}
+        pageSize={pageSize}
+        onPageChange={setPage}
+        onPageSizeChange={(newSize) => {
+          setPageSize(newSize);
+          setPage(1);
+        }}
+        filters={typeFilterControl}
+        emptyTitle="No interactions found"
+        emptyMessage="Get started by logging your first interaction."
+        emptyActionLabel="Add Interaction"
+        onEmptyAction={handleOpenAddModal}
+        getRowKey={(item) => item.id}
+        onRowClick={handleOpenDetailModal}
+        ariaLabel="Interactions data table"
       />
 
       {/* Add Interaction Modal */}
-      <Modal
-        isOpen={isAddModalOpen}
-        onClose={() => setIsAddModalOpen(false)}
-        title="Add Interaction"
-        data-testid="add-interaction-modal"
-      >
-        <InteractionForm
-          companies={companyOptions}
-          contacts={contactOptions}
-          leads={leadOptions}
-          onSubmit={handleCreateInteraction}
-          onCancel={() => setIsAddModalOpen(false)}
-          isLoading={isSubmitting}
-          serverError={formServerError}
-          serverFieldErrors={formFieldErrors}
-          submitLabel="Create Interaction"
-        />
-      </Modal>
+      {isAddModalOpen && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="add-interaction-modal-title"
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 1000,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            backgroundColor: 'rgba(0, 0, 0, 0.5)',
+            padding: spacing.md,
+          }}
+          onClick={handleCloseAddModal}
+        >
+          <div
+            style={{
+              backgroundColor: colors.surface.containerLowest,
+              borderRadius: rounded.lg,
+              boxShadow: shadows.lg,
+              width: '100%',
+              maxWidth: '600px',
+              maxHeight: '90vh',
+              overflowY: 'auto',
+              padding: spacing.lg,
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <InteractionForm
+              title="Log New Interaction"
+              submitLabel="Log Interaction"
+              companies={companies}
+              contacts={contacts}
+              leads={leads}
+              onSubmit={handleCreateInteraction}
+              onCancel={handleCloseAddModal}
+              isSubmitting={isSubmitting}
+              apiError={formApiError}
+            />
+          </div>
+        </div>
+      )}
 
       {/* Edit Interaction Modal */}
-      <Modal
-        isOpen={!!editingInteraction}
-        onClose={() => setEditingInteraction(null)}
-        title="Edit Interaction"
-        data-testid="edit-interaction-modal"
-      >
-        {editingInteraction && (
-          <InteractionForm
-            initialValues={editingInteraction}
-            companies={companyOptions}
-            contacts={contactOptions}
-            leads={leadOptions}
-            onSubmit={handleUpdateInteraction}
-            onCancel={() => setEditingInteraction(null)}
-            isLoading={isSubmitting}
-            serverError={formServerError}
-            serverFieldErrors={formFieldErrors}
-            submitLabel="Update Interaction"
-          />
-        )}
-      </Modal>
+      {isEditModalOpen && selectedInteraction && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="edit-interaction-modal-title"
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 1000,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            backgroundColor: 'rgba(0, 0, 0, 0.5)',
+            padding: spacing.md,
+          }}
+          onClick={handleCloseEditModal}
+        >
+          <div
+            style={{
+              backgroundColor: colors.surface.containerLowest,
+              borderRadius: rounded.lg,
+              boxShadow: shadows.lg,
+              width: '100%',
+              maxWidth: '600px',
+              maxHeight: '90vh',
+              overflowY: 'auto',
+              padding: spacing.lg,
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <InteractionForm
+              title={`Edit Interaction #${selectedInteraction.id}`}
+              submitLabel="Save Changes"
+              initialValues={selectedInteraction}
+              companies={companies}
+              contacts={contacts}
+              leads={leads}
+              onSubmit={handleUpdateInteraction}
+              onCancel={handleCloseEditModal}
+              isSubmitting={isSubmitting}
+              apiError={formApiError}
+            />
+          </div>
+        </div>
+      )}
 
-      {/* View Interaction Detail Modal */}
-      <Modal
-        isOpen={!!viewingInteraction}
-        onClose={() => setViewingInteraction(null)}
-        title="Interaction Details"
-        data-testid="view-interaction-modal"
-      >
-        {viewingInteraction && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: spacing[4] }}>
-            {isDetailLoading && (
-              <div style={{ fontSize: typography.styles.caption.fontSize, color: colors.surface.onSurfaceVariant }}>
-                Refreshing details...
-              </div>
-            )}
-
-            <div>
-              <div
-                style={{
-                  fontSize: typography.styles.caption.fontSize,
-                  color: colors.surface.onSurfaceVariant,
-                  marginBottom: spacing[1],
-                }}
-              >
-                Type
-              </div>
-              <div>
-                <StatusBadge
-                  status={viewingInteraction.type || 'note'}
-                  label={
-                    INTERACTION_TYPE_OPTIONS.find(
-                      (t) => t.value === (viewingInteraction.type || 'note')
-                    )?.label || viewingInteraction.type || 'Note'
-                  }
-                />
-              </div>
-            </div>
-
-            <div>
-              <div
-                style={{
-                  fontSize: typography.styles.caption.fontSize,
-                  color: colors.surface.onSurfaceVariant,
-                  marginBottom: spacing[1],
-                }}
-              >
-                Summary / Notes
-              </div>
-              <div
-                style={{
-                  fontSize: typography.styles.bodyMd.fontSize,
-                  color: colors.surface.onSurface,
-                  backgroundColor: colors.surface.containerLow,
-                  padding: spacing[3],
-                  borderRadius: radii.md,
-                  whiteSpace: 'pre-wrap',
-                }}
-              >
-                {viewingInteraction.summary || viewingInteraction.notes || '—'}
-              </div>
-            </div>
-
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: spacing[4] }}>
-              <div>
-                <div
-                  style={{
-                    fontSize: typography.styles.caption.fontSize,
-                    color: colors.surface.onSurfaceVariant,
-                    marginBottom: spacing[1],
-                  }}
-                >
-                  Date
-                </div>
-                <div style={{ fontSize: typography.styles.bodyMd.fontSize, color: colors.surface.onSurface }}>
-                  {formatDate(viewingInteraction.date || viewingInteraction.timestamp || viewingInteraction.created_at)}
-                </div>
-              </div>
-
-              <div>
-                <div
-                  style={{
-                    fontSize: typography.styles.caption.fontSize,
-                    color: colors.surface.onSurfaceVariant,
-                    marginBottom: spacing[1],
-                  }}
-                >
-                  Owner
-                </div>
-                <div style={{ fontSize: typography.styles.bodyMd.fontSize, color: colors.surface.onSurface }}>
-                  {viewingInteraction.owner || '—'}
-                </div>
-              </div>
-            </div>
-
-            <div>
-              <div
-                style={{
-                  fontSize: typography.styles.caption.fontSize,
-                  color: colors.surface.onSurfaceVariant,
-                  marginBottom: spacing[1],
-                }}
-              >
-                Related Entity
-              </div>
-              <div style={{ fontSize: typography.styles.bodyMd.fontSize, color: colors.surface.onSurface }}>
-                {viewingInteraction.company_id && companyMap[viewingInteraction.company_id]
-                  ? `Company: ${companyMap[viewingInteraction.company_id]}`
-                  : viewingInteraction.contact_id && contactMap[viewingInteraction.contact_id]
-                  ? `Contact: ${contactMap[viewingInteraction.contact_id]}`
-                  : viewingInteraction.lead_id && leadMap[viewingInteraction.lead_id]
-                  ? `Lead: ${leadMap[viewingInteraction.lead_id]}`
-                  : 'Unassigned'}
-              </div>
-            </div>
-
+      {/* Interaction Detail Modal */}
+      {isDetailModalOpen && selectedInteraction && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="detail-interaction-modal-title"
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 1000,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            backgroundColor: 'rgba(0, 0, 0, 0.5)',
+            padding: spacing.md,
+          }}
+          onClick={handleCloseDetailModal}
+        >
+          <div
+            style={{
+              backgroundColor: colors.surface.containerLowest,
+              borderRadius: rounded.lg,
+              boxShadow: shadows.lg,
+              width: '100%',
+              maxWidth: '650px',
+              maxHeight: '90vh',
+              overflowY: 'auto',
+              padding: spacing.xl,
+              display: 'flex',
+              flexDirection: 'column',
+              gap: spacing.md,
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Modal Header */}
             <div
               style={{
                 display: 'flex',
-                alignItems: 'center',
+                justifyContent: 'space-between',
+                alignItems: 'flex-start',
+                borderBottom: `1px solid ${colors.borderVariant}`,
+                paddingBottom: spacing.sm,
+              }}
+            >
+              <div>
+                <h2
+                  id="detail-interaction-modal-title"
+                  style={{
+                    fontSize: typography.sizes['headline-sm'].fontSize,
+                    fontWeight: typography.sizes['headline-sm'].fontWeight,
+                    color: colors.surface.onSurface,
+                    margin: 0,
+                  }}
+                >
+                  {interactionDetail?.summary || selectedInteraction.summary}
+                </h2>
+                <div style={{ marginTop: spacing.xs }}>
+                  <StatusBadge
+                    label={(interactionDetail?.type || selectedInteraction.type || 'note').toUpperCase()}
+                    status={interactionDetail?.type || selectedInteraction.type}
+                    variant={
+                      getTypeBadgeVariant(
+                        interactionDetail?.type || selectedInteraction.type || 'note'
+                      ) as 'info' | 'primary' | 'success' | 'warning' | 'neutral'
+                    }
+                  />
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={handleCloseDetailModal}
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  fontSize: '20px',
+                  color: colors.surface.onSurfaceVariant,
+                  cursor: 'pointer',
+                  padding: spacing.xs,
+                }}
+                aria-label="Close modal"
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Modal Content */}
+            {isDetailLoading ? (
+              <LoadingState message="Loading interaction details..." />
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: spacing.md }}>
+                <div
+                  style={{
+                    display: 'grid',
+                    gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
+                    gap: spacing.md,
+                  }}
+                >
+                  <div>
+                    <span
+                      style={{
+                        fontSize: typography.sizes.caption.fontSize,
+                        color: colors.surface.onSurfaceVariant,
+                        display: 'block',
+                      }}
+                    >
+                      Date
+                    </span>
+                    <span
+                      style={{
+                        fontSize: typography.sizes.body.fontSize,
+                        fontWeight: 500,
+                        color: colors.surface.onSurface,
+                      }}
+                    >
+                      {formatDate(
+                        (interactionDetail || selectedInteraction).date ||
+                          (interactionDetail || selectedInteraction).interaction_date ||
+                          (interactionDetail || selectedInteraction).timestamp
+                      ) || '—'}
+                    </span>
+                  </div>
+
+                  <div>
+                    <span
+                      style={{
+                        fontSize: typography.sizes.caption.fontSize,
+                        color: colors.surface.onSurfaceVariant,
+                        display: 'block',
+                      }}
+                    >
+                      Owner
+                    </span>
+                    <span
+                      style={{
+                        fontSize: typography.sizes.body.fontSize,
+                        fontWeight: 500,
+                        color: colors.surface.onSurface,
+                      }}
+                    >
+                      {(interactionDetail || selectedInteraction).owner || '—'}
+                    </span>
+                  </div>
+
+                  <div>
+                    <span
+                      style={{
+                        fontSize: typography.sizes.caption.fontSize,
+                        color: colors.surface.onSurfaceVariant,
+                        display: 'block',
+                      }}
+                    >
+                      Linked Company
+                    </span>
+                    <span
+                      style={{
+                        fontSize: typography.sizes.body.fontSize,
+                        fontWeight: 500,
+                        color: colors.surface.onSurface,
+                      }}
+                    >
+                      {(interactionDetail || selectedInteraction).company_id
+                        ? companyMap[(interactionDetail || selectedInteraction).company_id!] ||
+                          `Company #${(interactionDetail || selectedInteraction).company_id}`
+                        : '—'}
+                    </span>
+                  </div>
+
+                  <div>
+                    <span
+                      style={{
+                        fontSize: typography.sizes.caption.fontSize,
+                        color: colors.surface.onSurfaceVariant,
+                        display: 'block',
+                      }}
+                    >
+                      Linked Contact
+                    </span>
+                    <span
+                      style={{
+                        fontSize: typography.sizes.body.fontSize,
+                        fontWeight: 500,
+                        color: colors.surface.onSurface,
+                      }}
+                    >
+                      {(interactionDetail || selectedInteraction).contact_id
+                        ? contactMap[(interactionDetail || selectedInteraction).contact_id!] ||
+                          `Contact #${(interactionDetail || selectedInteraction).contact_id}`
+                        : '—'}
+                    </span>
+                  </div>
+
+                  <div>
+                    <span
+                      style={{
+                        fontSize: typography.sizes.caption.fontSize,
+                        color: colors.surface.onSurfaceVariant,
+                        display: 'block',
+                      }}
+                    >
+                      Linked Lead
+                    </span>
+                    <span
+                      style={{
+                        fontSize: typography.sizes.body.fontSize,
+                        fontWeight: 500,
+                        color: colors.surface.onSurface,
+                      }}
+                    >
+                      {(interactionDetail || selectedInteraction).lead_id
+                        ? leadMap[(interactionDetail || selectedInteraction).lead_id!] ||
+                          `Lead #${(interactionDetail || selectedInteraction).lead_id}`
+                        : '—'}
+                    </span>
+                  </div>
+
+                  <div>
+                    <span
+                      style={{
+                        fontSize: typography.sizes.caption.fontSize,
+                        color: colors.surface.onSurfaceVariant,
+                        display: 'block',
+                      }}
+                    >
+                      Created At
+                    </span>
+                    <span
+                      style={{
+                        fontSize: typography.sizes.body.fontSize,
+                        color: colors.surface.onSurface,
+                      }}
+                    >
+                      {formatDate((interactionDetail || selectedInteraction).created_at) || '—'}
+                    </span>
+                  </div>
+                </div>
+
+                {(interactionDetail || selectedInteraction).notes && (
+                  <div
+                    style={{
+                      borderTop: `1px solid ${colors.borderVariant}`,
+                      paddingTop: spacing.sm,
+                    }}
+                  >
+                    <span
+                      style={{
+                        fontSize: typography.sizes.caption.fontSize,
+                        color: colors.surface.onSurfaceVariant,
+                        display: 'block',
+                        marginBottom: spacing.xs,
+                      }}
+                    >
+                      Additional Notes
+                    </span>
+                    <p
+                      style={{
+                        fontSize: typography.sizes.body.fontSize,
+                        color: colors.surface.onSurface,
+                        margin: 0,
+                        whiteSpace: 'pre-wrap',
+                      }}
+                    >
+                      {(interactionDetail || selectedInteraction).notes}
+                    </p>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Modal Actions Footer */}
+            <div
+              style={{
+                display: 'flex',
                 justifyContent: 'flex-end',
-                gap: spacing[3],
-                marginTop: spacing[4],
-                paddingTop: spacing[4],
-                borderTop: `1px solid ${colors.surface.outlineVariant}`,
+                gap: spacing.sm,
+                borderTop: `1px solid ${colors.borderVariant}`,
+                paddingTop: spacing.md,
+                marginTop: spacing.sm,
               }}
             >
               <button
+                type="button"
                 onClick={() => {
-                  const toEdit = viewingInteraction;
-                  setViewingInteraction(null);
-                  setEditingInteraction(toEdit);
-                  setFormServerError(null);
-                  setFormFieldErrors({});
+                  handleCloseDetailModal();
+                  handleOpenEditModal(selectedInteraction);
                 }}
                 style={{
-                  backgroundColor: 'transparent',
-                  border: `1px solid ${colors.surface.outlineVariant}`,
-                  borderRadius: radii.md,
-                  padding: `${spacing[2]} ${spacing[4]}`,
-                  fontSize: typography.styles.bodyMd.fontSize,
+                  padding: `${spacing.xs} ${spacing.md}`,
+                  borderRadius: rounded.md,
+                  border: `1px solid ${colors.borderVariant}`,
+                  backgroundColor: colors.surface.containerLowest,
                   color: colors.surface.onSurface,
+                  fontSize: typography.sizes.body.fontSize,
                   cursor: 'pointer',
                 }}
               >
-                Edit Interaction
+                Edit
               </button>
               <button
+                type="button"
                 onClick={() => {
-                  const toDelete = viewingInteraction;
-                  setViewingInteraction(null);
-                  setDeletingInteraction(toDelete);
-                  setDeleteError(null);
+                  handleCloseDetailModal();
+                  handleOpenDeleteModal(selectedInteraction);
                 }}
                 style={{
+                  padding: `${spacing.xs} ${spacing.md}`,
+                  borderRadius: rounded.md,
+                  border: `1px solid ${colors.semantic.errorBorder}`,
                   backgroundColor: 'transparent',
-                  border: `1px solid ${colors.accent.secondary}`,
-                  borderRadius: radii.md,
-                  padding: `${spacing[2]} ${spacing[4]}`,
-                  fontSize: typography.styles.bodyMd.fontSize,
-                  color: colors.accent.secondary,
+                  color: colors.semantic.error,
+                  fontSize: typography.sizes.body.fontSize,
                   cursor: 'pointer',
                 }}
               >
-                Delete Interaction
+                Delete
+              </button>
+              <button
+                type="button"
+                onClick={handleCloseDetailModal}
+                style={{
+                  padding: `${spacing.xs} ${spacing.md}`,
+                  borderRadius: rounded.md,
+                  border: 'none',
+                  backgroundColor: colors.surface.containerHigh,
+                  color: colors.surface.onSurface,
+                  fontSize: typography.sizes.body.fontSize,
+                  cursor: 'pointer',
+                }}
+              >
+                Close
               </button>
             </div>
           </div>
-        )}
-      </Modal>
+        </div>
+      )}
 
-      {/* Confirmation Dialog for Deletion */}
+      {/* Delete Confirmation Dialog */}
       <ConfirmationDialog
-        isOpen={!!deletingInteraction}
+        isOpen={isDeleteModalOpen}
         title="Delete Interaction"
-        message={
-          deleteError
-            ? deleteError
-            : `Are you sure you want to delete this interaction? This action cannot be undone.`
-        }
-        confirmLabel="Delete"
+        message={`Are you sure you want to delete interaction "${selectedInteraction?.summary || ''}"? This action cannot be undone.`}
+        confirmLabel="Delete Interaction"
         cancelLabel="Cancel"
         onConfirm={handleDeleteInteraction}
-        onCancel={() => {
-          setDeletingInteraction(null);
-          setDeleteError(null);
-        }}
-        isDanger
-        isLoading={isDeleting}
-        data-testid="delete-interaction-dialog"
+        onCancel={handleCloseDeleteModal}
+        isConfirming={isDeleting}
+        variant="danger"
       />
-    </div>
+    </section>
   );
 }
